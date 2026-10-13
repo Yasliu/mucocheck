@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -13,7 +13,8 @@ export async function GET(req: Request) {
 
     const { searchParams } = new URL(req.url);
     const classId = searchParams.get("classId") || undefined;
-    const students = serverStore.getStudents(classId, teacher.id);
+    const store = await getStore(req);
+    const students = await (store as any).getStudents(teacher.id, classId);
     return NextResponse.json({ success: true, students });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to fetch students";
@@ -35,15 +36,17 @@ export async function POST(req: Request) {
       );
     }
 
+    const store = await getStore(req);
+
     if (body.id) {
-      const existing = serverStore.getStudent(body.id);
+      const existing = await (store as any).getStudent(body.id);
       if (existing && existing.teacher_id && existing.teacher_id !== teacher.id) {
         return forbiddenResponse(
           "Access denied: You do not have permission to modify another teacher's student."
         );
       }
 
-      const updated = serverStore.updateStudent(body.id, {
+      const updated = await (store as any).updateStudent(body.id, teacher.id, {
         full_name: body.full_name,
         roll_number: body.roll_number,
         email: body.email,
@@ -52,8 +55,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true, student: updated });
     }
 
-    const created = serverStore.createStudent({
-      teacher_id: teacher.id,
+    const created = await (store as any).createStudent(teacher.id, {
       full_name: body.full_name,
       roll_number: body.roll_number,
       class_id: body.class_id,

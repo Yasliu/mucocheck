@@ -5,7 +5,8 @@ import {
   unauthorizedResponse,
   forbiddenResponse,
 } from "@/lib/auth/server-auth";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export async function GET(
   req: Request,
@@ -14,7 +15,7 @@ export async function GET(
   try {
     const resolvedParams = await params;
     const pathSegments = resolvedParams.path || [];
-    const relativePath = pathSegments.join("/");
+    let relativePath = pathSegments.join("/");
 
     if (!relativePath) {
       return NextResponse.json({ error: "Missing file path" }, { status: 400 });
@@ -26,13 +27,16 @@ export async function GET(
       return unauthorizedResponse("Authentication required to access student scripts or schemes.");
     }
 
-    // If explicit header demands live session or forbids fallback
-    if (req.headers.get("x-allow-fallback") === "false" && teacher.source === "fallback") {
-      return unauthorizedResponse("Authentication required: Live session or credentials required.");
-    }
+    const store = await getStore(req);
+    const supabase = await createServerSupabaseClient(req);
 
     // 2. Authorize File Ownership
-    const fileOwnerId = serverStore.getFileOwnerTeacherId(relativePath);
+    // Check if relativePath is stored as supabase:// or local:// or raw relative path
+    const fileOwnerId = await (store as any).getFileOwnerTeacherId?.(relativePath) ||
+      await (store as any).getFileOwnerTeacherId?.(`supabase://scripts/${relativePath}`) ||
+      await (store as any).getFileOwnerTeacherId?.(`supabase://reference_docs/${relativePath}`) ||
+      await (store as any).getFileOwnerTeacherId?.(`local://${relativePath}`);
+
     if (fileOwnerId && fileOwnerId !== teacher.id) {
       return forbiddenResponse(
         "Access denied: You do not have permission to view or download files belonging to another teacher."
@@ -40,7 +44,21 @@ export async function GET(
     }
 
     // 3. Retrieve Private File Buffer
-    const file = await getPrivateFile(relativePath);
+    let file = await getPrivateFile(relativePath, {
+      teacherId: teacher.id,
+      supabaseClient: supabase,
+    });
+
+    if (!file && !relativePath.startsWith("supabase://")) {
+      // Try resolving via supabase uri
+      const bucket = relativePath.startsWith("papers/") || relativePath.startsWith("schemes/")
+        ? "reference_docs"
+        : "scripts";
+      file = await getPrivateFile(`supabase://${bucket}/${relativePath}`, {
+        teacherId: teacher.id,
+        supabaseClient: supabase,
+      });
+    }
 
     if (!file) {
       return NextResponse.json({ error: "File not found" }, { status: 404 });

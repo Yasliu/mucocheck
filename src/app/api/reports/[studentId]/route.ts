@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,7 +15,9 @@ export async function GET(
     if (!teacher) return unauthorizedResponse();
 
     const { studentId } = await params;
-    const stu = serverStore.getStudent(studentId);
+    const store = await getStore(req);
+
+    const stu = await (store as any).getStudent(studentId, teacher.id);
     if (!stu) {
       return NextResponse.json({ error: "Student not found" }, { status: 404 });
     }
@@ -26,7 +28,7 @@ export async function GET(
       );
     }
 
-    const report = serverStore.getStudentReportCard(studentId);
+    const report = await store.getStudentReportCard(studentId, teacher.id);
     return NextResponse.json({ success: true, report });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to generate report card";

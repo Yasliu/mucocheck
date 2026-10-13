@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
-import { repository } from "@/lib/db/repo";
+import { getStore } from "@/lib/db/get-store";
+import {
+  getAuthenticatedTeacher,
+  unauthorizedResponse,
+  forbiddenResponse,
+} from "@/lib/auth/server-auth";
 
 export async function GET(req: Request) {
+  const teacher = await getAuthenticatedTeacher(req);
+  if (!teacher) return unauthorizedResponse();
+
   const { searchParams } = new URL(req.url);
   const assessmentId = searchParams.get("assessmentId");
 
@@ -10,14 +18,26 @@ export async function GET(req: Request) {
   }
 
   try {
-    const markbook = repository.getMarkbook(assessmentId);
-    const { assessment, questions, rows } = markbook;
+    const store = await getStore(req);
+    const assessment = await store.getAssessment(assessmentId);
+    if (!assessment) {
+      return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
+    }
+
+    if (assessment.teacher_id && assessment.teacher_id !== teacher.id) {
+      return forbiddenResponse(
+        "Access denied: You do not have permission to export another teacher's assessment."
+      );
+    }
+
+    const markbook = await (store as any).getMarkbook(assessmentId, teacher.id);
+    const { questions, rows } = markbook;
 
     // Build CSV Headers
     const headers = [
       "Roll Number",
       "Student Name",
-      ...questions.map((q) => `Q${q.question_number} (Max ${q.max_marks})`),
+      ...questions.map((q: any) => `Q${q.question_number} (Max ${q.max_marks})`),
       `Raw Total (Max ${assessment.max_marks})`,
       "Percentage",
       "Status",
@@ -26,7 +46,7 @@ export async function GET(req: Request) {
     const csvLines = [headers.join(",")];
 
     for (const r of rows) {
-      const qScores = questions.map((q) => {
+      const qScores = questions.map((q: any) => {
         const val = r.question_scores[q.id];
         if (!val) return "—";
         const score = val.approved_score !== null ? val.approved_score : val.proposed_score;

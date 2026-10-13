@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,7 +15,8 @@ export async function GET(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const assessment = serverStore.getAssessment(id);
+    const store = await getStore(req);
+    const assessment = await store.getAssessment(id);
 
     if (!assessment) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
@@ -27,9 +28,9 @@ export async function GET(
       );
     }
 
-    const questions = serverStore.getQuestions(id);
-    const scripts = serverStore.getScripts(id);
-    const results = serverStore.getGradingResults(id);
+    const questions = await store.getQuestions(id);
+    const scripts = await store.getScripts(id);
+    const results = await store.getGradingResults(id);
 
     return NextResponse.json({
       success: true,
@@ -53,7 +54,8 @@ export async function PATCH(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const assessment = serverStore.getAssessment(id);
+    const store = await getStore(req);
+    const assessment = await store.getAssessment(id);
 
     if (!assessment) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
@@ -66,7 +68,7 @@ export async function PATCH(
     }
 
     const updates = await req.json();
-    const updated = serverStore.updateAssessment(id, updates);
+    const updated = await (store as any).updateAssessment(id, teacher.id, updates);
     return NextResponse.json({ success: true, assessment: updated });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to update assessment";
@@ -83,7 +85,8 @@ export async function DELETE(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const assessment = serverStore.getAssessment(id);
+    const store = await getStore(req);
+    const assessment = await store.getAssessment(id);
 
     if (!assessment) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
@@ -95,7 +98,7 @@ export async function DELETE(
       );
     }
 
-    serverStore.deleteAssessment(id);
+    await (store as any).deleteAssessment(id, teacher.id);
     return NextResponse.json({ success: true, message: "Assessment deleted" });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to delete assessment";

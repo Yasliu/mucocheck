@@ -4,6 +4,7 @@ import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
 } from "@/lib/auth/server-auth";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 export async function POST(req: Request) {
   try {
@@ -34,12 +35,21 @@ export async function POST(req: Request) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const saved = await savePrivateFile(buffer, file.name, validCategory);
+    const supabase = await createServerSupabaseClient(req);
+
+    const saved = await savePrivateFile(buffer, file.name, validCategory, {
+      teacherId: teacher.id,
+      supabaseClient: supabase,
+    });
+
+    // Stored path stored in database record:
+    const dbPath = saved.storageUri;
 
     return NextResponse.json({
       success: true,
       teacherId: teacher.id,
-      filePath: saved.relativePath,
+      filePath: dbPath,
+      relativePath: saved.relativePath,
       fileName: file.name,
       storedName: saved.fileName,
       fileSize: saved.size,

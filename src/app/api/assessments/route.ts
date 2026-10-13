@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -12,11 +12,8 @@ export async function GET(req: Request) {
       return unauthorizedResponse();
     }
 
-    if (req.headers.get("x-allow-fallback") === "false" && teacher.source === "fallback") {
-      return unauthorizedResponse("Authentication required: Live credentials required.");
-    }
-
-    const assessments = serverStore.getAssessments(teacher.id);
+    const store = await getStore(req);
+    const assessments = await store.getAssessments(teacher.id);
     return NextResponse.json({ success: true, assessments });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to fetch assessments";
@@ -31,10 +28,6 @@ export async function POST(req: Request) {
       return unauthorizedResponse();
     }
 
-    if (req.headers.get("x-allow-fallback") === "false" && teacher.source === "fallback") {
-      return unauthorizedResponse("Authentication required: Live credentials required.");
-    }
-
     const body = await req.json();
 
     if (!body.title || !body.subject) {
@@ -44,9 +37,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const created = serverStore.createAssessment({
-      id: body.id,
-      teacher_id: teacher.id,
+    const store = await getStore(req);
+    const created = await (store as any).createAssessment(teacher.id, {
       title: body.title,
       subject: body.subject,
       grade_level: body.grade_level || "Grade 10",

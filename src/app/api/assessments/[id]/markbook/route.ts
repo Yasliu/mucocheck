@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,7 +15,8 @@ export async function GET(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const asm = serverStore.getAssessment(id);
+    const store = await getStore(req);
+    const asm = await store.getAssessment(id);
     if (!asm) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
     }
@@ -30,7 +31,7 @@ export async function GET(
     const targetScaleParam = searchParams.get("targetScaleMax");
     const targetScaleMax = targetScaleParam ? Number(targetScaleParam) : undefined;
 
-    const markbook = serverStore.getMarkbook(id, targetScaleMax);
+    const markbook = await (store as any).getMarkbook(id, teacher.id, targetScaleMax);
     return NextResponse.json({ success: true, markbook });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to generate markbook";

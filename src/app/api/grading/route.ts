@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import { gradingEngine } from "@/lib/grading/engine";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
+import {
+  getAuthenticatedTeacher,
+  unauthorizedResponse,
+  forbiddenResponse,
+} from "@/lib/auth/server-auth";
 
 export async function POST(req: Request) {
   try {
+    const teacher = await getAuthenticatedTeacher(req);
+    if (!teacher) return unauthorizedResponse();
+
     const body = await req.json();
     const { assessmentId, scriptId, preferredMode } = body;
 
@@ -14,12 +22,25 @@ export async function POST(req: Request) {
       );
     }
 
-    const script = serverStore.getScript(scriptId);
+    const store = await getStore(req);
+
+    // Verify assessment ownership
+    const asm = await store.getAssessment(assessmentId);
+    if (!asm) {
+      return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
+    }
+    if (asm.teacher_id && asm.teacher_id !== teacher.id) {
+      return forbiddenResponse(
+        "Access denied: You do not have permission to trigger grading on another teacher's assessment."
+      );
+    }
+
+    const script = await (store as any).getScript(scriptId);
     if (!script) {
       return NextResponse.json({ error: "Script not found." }, { status: 404 });
     }
 
-    const questions = serverStore.getQuestions(assessmentId);
+    const questions = await store.getQuestions(assessmentId);
     if (questions.length === 0) {
       return NextResponse.json(
         { error: "No assessment questions configured." },
@@ -54,33 +75,24 @@ export async function POST(req: Request) {
       preferredMode || "mock"
     );
 
-    // Save outputs to serverStore
+    // Save outputs through store
     for (const res of result.results) {
-      const existing = serverStore
-        .getGradingResults(assessmentId, scriptId)
-        .find((r) => r.question_id === res.questionId);
-
-      if (existing) {
-        serverStore.updateGradingResult(existing.id, {
-          approved_score: null, // Preserved separately from proposed
-          status: res.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
-          feedback: res.conciseRationale,
-          edited_by_teacher: false,
-          is_unreadable: res.isUnreadable,
-          is_unmatched: res.isUnmatched,
-        });
-      } else {
-        // Create new result record
-        const newResultId = `gr-${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-        serverStore.updateGradingResult(newResultId, {
-          approved_score: null,
-          status: res.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
-          feedback: res.conciseRationale,
-          edited_by_teacher: false,
-          is_unreadable: res.isUnreadable,
-          is_unmatched: res.isUnmatched,
-        });
-      }
+      await (store as any).saveGradingProposal(
+        assessmentId,
+        scriptId,
+        res.questionId,
+        script.student_id,
+        {
+          proposedMarks: res.proposedMarks,
+          conciseRationale: res.conciseRationale,
+          uncertaintyStatus: res.uncertaintyStatus,
+          confidenceScore: res.confidenceScore,
+          criteriaSatisfied: res.criteriaSatisfied,
+          isMock: res.isMock,
+          isUnreadable: res.isUnreadable,
+          isUnmatched: res.isUnmatched,
+        }
+      );
     }
 
     return NextResponse.json({

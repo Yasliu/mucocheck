@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,12 +15,14 @@ export async function POST(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const target = serverStore.getGradingResult(id);
+    const store = await getStore(req);
+
+    const target = await (store as any).getGradingResult?.(id);
     if (!target) {
       return NextResponse.json({ error: "Grading result not found" }, { status: 404 });
     }
 
-    const asm = serverStore.getAssessment(target.assessment_id);
+    const asm = await store.getAssessment(target.assessment_id);
     if (asm && asm.teacher_id && asm.teacher_id !== teacher.id) {
       return forbiddenResponse(
         "Access denied: You do not have permission to modify grading results for another teacher's assessment."
@@ -29,7 +31,7 @@ export async function POST(
 
     const body = await req.json();
 
-    const updated = serverStore.updateGradingResult(id, {
+    const updated = await (store as any).updateGradingResult(id, teacher.id, {
       approved_score: body.approved_score !== undefined ? (body.approved_score === null ? null : Number(body.approved_score)) : undefined,
       feedback: body.feedback,
       status: body.status,

@@ -294,7 +294,13 @@ class ServerStore {
       max_marks: number;
       rubric_criteria?: Array<{ id: string; criterion: string; marks: number }>;
     }>;
-  }): Assessment {
+  }): Assessment;
+  createAssessment(teacherId: string, data: any): Assessment;
+  createAssessment(
+    teacherIdOrData: string | any,
+    dataMaybe?: any
+  ): Assessment {
+    const data = typeof teacherIdOrData === "object" ? teacherIdOrData : { ...dataMaybe, teacher_id: teacherIdOrData };
     const assessmentId = data.id || `asm-${Date.now()}`;
     const newAssessment: Assessment = {
       id: assessmentId,
@@ -331,7 +337,7 @@ class ServerStore {
     if (data.questions && data.questions.length > 0) {
       // Clear previous questions for this assessment
       this.data.questions = this.data.questions.filter((q) => q.assessment_id !== assessmentId);
-      data.questions.forEach((q) => {
+      data.questions.forEach((q: any) => {
         this.data.questions.push({
           id: `q-${assessmentId}-${q.question_number}`,
           assessment_id: assessmentId,
@@ -592,6 +598,56 @@ class ServerStore {
     this.saveData();
   }
 
+  saveGradingProposal(
+    assessmentId: string,
+    scriptId: string,
+    questionId: string,
+    studentId: string,
+    evaluation: {
+      proposedMarks: number;
+      conciseRationale: string;
+      uncertaintyStatus: GradingResult["uncertainty_status"];
+      confidenceScore: number;
+      criteriaSatisfied?: string[];
+      isMock: boolean;
+      isUnreadable?: boolean;
+      isUnmatched?: boolean;
+    }
+  ): void {
+    const existing = this.data.results.find(
+      (r) => r.script_id === scriptId && r.question_id === questionId
+    );
+    if (existing) {
+      this.updateGradingResult(existing.id, {
+        approved_score: null,
+        status: evaluation.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
+        feedback: evaluation.conciseRationale,
+        edited_by_teacher: false,
+        is_unreadable: evaluation.isUnreadable,
+        is_unmatched: evaluation.isUnmatched,
+      });
+    } else {
+      this.addGradingResult({
+        assessment_id: assessmentId,
+        student_id: studentId,
+        script_id: scriptId,
+        question_id: questionId,
+        proposed_score: evaluation.proposedMarks,
+        approved_score: null,
+        rationale: evaluation.conciseRationale,
+        uncertainty_status: evaluation.uncertaintyStatus,
+        confidence_score: evaluation.confidenceScore,
+        criteria_satisfied: evaluation.criteriaSatisfied || [],
+        feedback: evaluation.conciseRationale,
+        status: evaluation.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
+        is_mock: evaluation.isMock,
+        edited_by_teacher: false,
+        audit_history: [],
+        created_at: new Date().toISOString(),
+      });
+    }
+  }
+
   private recalculateScriptTotals(scriptId: string): void {
     const scr = this.getScript(scriptId);
     if (!scr) return;
@@ -632,7 +688,11 @@ class ServerStore {
   }
 
   // Markbook
-  getMarkbook(assessmentId: string, targetScaleMax?: number): {
+  getMarkbook(
+    assessmentId: string,
+    teacherIdOrTargetScale?: string | number,
+    targetScaleMaxParam?: number
+  ): {
     assessment: Assessment;
     questions: AssessmentQuestion[];
     rows: MarkbookRow[];
@@ -645,6 +705,7 @@ class ServerStore {
       pendingCount: number;
     };
   } {
+    const targetScaleMax = typeof teacherIdOrTargetScale === "number" ? teacherIdOrTargetScale : targetScaleMaxParam;
     const assessment = this.getAssessment(assessmentId);
     if (!assessment) throw new Error("Assessment not found");
 

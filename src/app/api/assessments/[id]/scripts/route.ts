@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,7 +15,8 @@ export async function POST(
     if (!teacher) return unauthorizedResponse();
 
     const { id } = await params;
-    const assessment = serverStore.getAssessment(id);
+    const store = await getStore(req);
+    const assessment = await store.getAssessment(id);
     if (!assessment) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
     }
@@ -28,7 +29,7 @@ export async function POST(
 
     const body = await req.json();
 
-    const script = serverStore.addScript({
+    const script = await (store as any).addScript({
       assessment_id: id,
       teacher_id: teacher.id,
       student_id: body.student_id,

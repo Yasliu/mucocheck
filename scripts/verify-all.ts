@@ -1,3 +1,4 @@
+(process.env as any).NODE_ENV = process.env.NODE_ENV || "test";
 import fs from "fs";
 import {
   calculateStudentTotals,
@@ -304,50 +305,66 @@ async function runVerification() {
   assert(pdfBuffer.length > 500, "PDF buffer has realistic document size");
   assert(pdfBuffer.subarray(0, 5).toString("ascii") === "%PDF-", "PDF begins with standard %PDF- header");
 
-  // 14. Teacher Authentication & Session Resolution
-  console.log("\n--- 14. Teacher Authentication & Session Resolution ---");
+  // 14. Teacher Authentication & Production Security
+  console.log("\n--- 14. Teacher Authentication & Production Security ---");
   const {
     getAuthenticatedTeacher,
     requireTeacher,
     verifyTeacherOwnership,
+    isDevAuthAllowed,
   } = await import("../src/lib/auth/server-auth");
 
-  // Fallback teacher resolution
-  const fallbackTeacher = await getAuthenticatedTeacher();
-  assert(fallbackTeacher !== null, "Resolves fallback teacher for local session");
-  assert(fallbackTeacher?.id === "usr-teacher-001", "Default teacher has ID usr-teacher-001");
-  assert(fallbackTeacher?.source === "fallback", "Identifies teacher as fallback");
+  // In test/dev environment, dev bypass is permitted
+  assert(isDevAuthAllowed() === true, "isDevAuthAllowed permits test/dev mode in non-production");
 
-  // Header-based teacher authentication
-  const mockReqWithAuth = new Request("http://localhost:3000/api/assessments", {
+  // Synthetic dev test identity
+  const mockDevTestReq = new Request("http://localhost:3000/api/assessments", {
     headers: {
-      "x-teacher-id": "usr-teacher-sarah",
-      "x-teacher-email": "sarah@mucono.edu",
-      "x-teacher-name": "Dr. Sarah Connor",
+      "x-dev-test-teacher-id": "usr-teacher-sarah",
+      "x-dev-test-teacher-email": "sarah@mucono.edu",
+      "x-dev-test-teacher-name": "Dr. Sarah Connor",
     },
   });
-  const headerTeacher = await getAuthenticatedTeacher(mockReqWithAuth);
-  assert(headerTeacher !== null, "Resolves teacher from authentication headers");
-  assert(headerTeacher?.id === "usr-teacher-sarah", "Extracted correct teacher ID from header");
-  assert(headerTeacher?.full_name === "Dr. Sarah Connor", "Extracted teacher full name");
-  assert(headerTeacher?.source === "header", "Identifies teacher as header authenticated");
+  const devTestTeacher = await getAuthenticatedTeacher(mockDevTestReq);
+  assert(devTestTeacher !== null, "Resolves synthetic teacher in dev/test mode");
+  assert(devTestTeacher?.id === "usr-teacher-sarah", "Extracted test teacher ID");
+  assert(devTestTeacher?.source === "dev_mode", "Identifies teacher source as dev_mode");
 
-  // Strict mode rejection when fallback is explicitly forbidden
-  const mockReqStrict = new Request("http://localhost:3000/api/assessments", {
-    headers: { "x-allow-fallback": "false" },
+  // Caller-supplied x-teacher-id header is NEVER trusted
+  const untrustedHeaderReq = new Request("http://localhost:3000/api/assessments", {
+    headers: {
+      "x-teacher-id": "attacker-spoofed-id",
+    },
   });
-  let strictRejected = false;
+  const untrustedResult = await getAuthenticatedTeacher(untrustedHeaderReq);
+  assert(untrustedResult?.id !== "attacker-spoofed-id", "Never trusts caller-supplied x-teacher-id header");
+
+  // PRODUCTION MODE SIMULATION: Strict rejection without valid Supabase session
+  const origNodeEnv = process.env.NODE_ENV;
+  (process.env as any).NODE_ENV = "production";
+
+  assert(isDevAuthAllowed() === false, "isDevAuthAllowed is strictly false in production");
+
+  const prodUnauthReq = new Request("http://localhost:3000/api/assessments");
+  const prodTeacher = await getAuthenticatedTeacher(prodUnauthReq);
+  assert(prodTeacher === null, "Production strictly returns null for unauthenticated requests");
+
+  let prodRequireThrew = false;
   try {
-    await requireTeacher(mockReqStrict, { strict: true });
-  } catch {
-    strictRejected = true;
+    await requireTeacher(prodUnauthReq);
+  } catch (err: any) {
+    prodRequireThrew = true;
+    assert(err.message === "UNAUTHORIZED", "Production requireTeacher throws UNAUTHORIZED");
   }
-  assert(strictRejected, "Strict mode rejects unauthenticated request when fallback is disabled");
+  assert(prodRequireThrew, "requireTeacher fails closed in production");
+
+  // Restore NODE_ENV
+  (process.env as any).NODE_ENV = origNodeEnv;
 
   // 15. Cross-User Access Denial & Multi-Teacher Isolation
   console.log("\n--- 15. Cross-User Access Denial & Multi-Teacher Isolation ---");
   const teacherA = { id: "usr-teacher-001", email: "vance@mucono.edu", full_name: "Dr. Eleanor Vance", role: "teacher" as const, source: "fallback" as const };
-  const teacherB = { id: "usr-teacher-002", email: "ross@mucono.edu", full_name: "Prof. Gregory Ross", role: "teacher" as const, source: "header" as const };
+  const teacherB = { id: "usr-teacher-002", email: "ross@mucono.edu", full_name: "Prof. Gregory Ross", role: "teacher" as const, source: "dev_mode" as const };
 
   // Teacher A creates an assessment
   const teacherA_Assessment = serverStore.createAssessment({
@@ -375,8 +392,13 @@ async function runVerification() {
   assert(verifyTeacherOwnership(teacherA, teacherA_Assessment.teacher_id) === true, "verifyTeacherOwnership passes for resource owner");
   assert(verifyTeacherOwnership(teacherB, teacherA_Assessment.teacher_id) === false, "verifyTeacherOwnership fails for cross-user teacher");
 
-  // 16. Private File Storage Authorization
-  console.log("\n--- 16. Private File Storage Authorization ---");
+  // 16. Private File Storage Authorization & Bucket Mapping
+  console.log("\n--- 16. Private File Storage Authorization & Bucket Mapping ---");
+  const { getStorageBucket } = await import("../src/lib/storage/file-storage");
+  assert(getStorageBucket("scripts") === "scripts", "Maps scripts category to 'scripts' bucket");
+  assert(getStorageBucket("papers") === "reference_docs", "Maps papers category to 'reference_docs' bucket");
+  assert(getStorageBucket("schemes") === "reference_docs", "Maps schemes category to 'reference_docs' bucket");
+
   const fileOwner = serverStore.getFileOwnerTeacherId(saveResult.relativePath);
   assert(fileOwner !== null, "Identified file owner teacher from database references");
   assert(verifyTeacherOwnership(teacherA, fileOwner!) === true, "Owner teacher authorized to stream private file");
@@ -389,22 +411,41 @@ async function runVerification() {
   assert(backupSnapshot.stats.assessments > 0, "Backup includes assessment records");
   assert(backupSnapshot.stats.classes > 0, "Backup includes class records");
 
-  // 18. Safe Database Request Failure Handling
-  console.log("\n--- 18. Safe Database Failure & Missing Configuration Handling ---");
-  // Simulates missing table error or offline database
-  let handledGracefully = false;
+  // 18. Database Service In Production (No Silent Fallback)
+  console.log("\n--- 18. Production Database Guard (No Silent Fallback) ---");
+  const { getStore, DatabaseServiceError } = await import("../src/lib/db/get-store");
+
+  (process.env as any).NODE_ENV = "production";
+  let prodStoreThrew = false;
   try {
-    const errorBody = { code: "PGRST205", message: "Could not find the table 'public.classes' in the schema cache" };
-    if (errorBody.code === "PGRST205") {
-      // System handles missing table and falls back to serverStore
-      const fallbackClasses = serverStore.getClasses();
-      assert(fallbackClasses.length > 0, "Fell back to server store safely without crashing or throwing");
-      handledGracefully = true;
+    // Calling getStore in production without live Supabase credentials must throw DatabaseServiceError
+    // Temporarily unset Supabase URL to test missing configuration
+    const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    try {
+      await getStore();
+    } finally {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
     }
-  } catch {
-    handledGracefully = false;
+  } catch (err: any) {
+    if (err instanceof DatabaseServiceError) {
+      prodStoreThrew = true;
+    }
   }
-  assert(handledGracefully, "Handles missing remote schema cache (PGRST205) with safe local fallback");
+  (process.env as any).NODE_ENV = origNodeEnv;
+
+  assert(prodStoreThrew, "getStore throws DatabaseServiceError in production when Supabase is missing (no silent fallback)");
+
+  // 19. UUID Normalization for Remote PostgreSQL Schema Compatibility
+  console.log("\n--- 19. PostgreSQL UUID Normalization ---");
+  const { normalizeUuid } = await import("../src/lib/db/supabase-store");
+  const testStandardUuid = "12345678-1234-4234-8234-123456789abc";
+  assert(normalizeUuid(testStandardUuid) === testStandardUuid, "Preserves valid RFC4122 UUID unchanged");
+
+  const convertedUuid = normalizeUuid("usr-teacher-001");
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  assert(uuidRegex.test(convertedUuid), "Converts synthetic teacher ID to valid RFC4122 UUID");
+  assert(normalizeUuid("usr-teacher-001") === convertedUuid, "Deterministic UUID conversion is reproducible");
 
   console.log(`\n==================================================`);
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);

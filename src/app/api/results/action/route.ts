@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { serverStore } from "@/lib/db/server-store";
+import { getStore } from "@/lib/db/get-store";
 import {
   getAuthenticatedTeacher,
   unauthorizedResponse,
@@ -15,24 +15,26 @@ export async function POST(req: Request) {
     const { action, resultId, scriptId, reason, newQuestionId, finalScore, teacherName } = body;
     const effectiveTeacherName = teacherName || teacher.full_name;
 
+    const store = await getStore(req);
+
     if (action === "approve_script") {
       if (!scriptId) {
         return NextResponse.json({ error: "scriptId is required for approve_script" }, { status: 400 });
       }
 
-      const scr = serverStore.getScript(scriptId);
+      const scr = await (store as any).getScript(scriptId);
       if (!scr) {
         return NextResponse.json({ error: "Script not found" }, { status: 404 });
       }
 
-      const asm = serverStore.getAssessment(scr.assessment_id);
+      const asm = await store.getAssessment(scr.assessment_id);
       if (asm && asm.teacher_id && asm.teacher_id !== teacher.id) {
         return forbiddenResponse(
           "Access denied: You do not have permission to approve scripts for another teacher's assessment."
         );
       }
 
-      serverStore.approveAllResultsForScript(scriptId, effectiveTeacherName);
+      await (store as any).approveAllResultsForScript(scriptId, effectiveTeacherName, teacher.id);
       return NextResponse.json({ success: true, message: "Script results approved." });
     }
 
@@ -40,12 +42,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "resultId is required." }, { status: 400 });
     }
 
-    const target = serverStore.getGradingResult(resultId);
+    const target = await (store as any).getGradingResult(resultId);
     if (!target) {
       return NextResponse.json({ error: "Grading result not found" }, { status: 404 });
     }
 
-    const asm = serverStore.getAssessment(target.assessment_id);
+    const asm = await store.getAssessment(target.assessment_id);
     if (asm && asm.teacher_id && asm.teacher_id !== teacher.id) {
       return forbiddenResponse(
         "Access denied: You do not have permission to perform review actions on another teacher's assessment."
@@ -55,19 +57,19 @@ export async function POST(req: Request) {
     let updated;
     switch (action) {
       case "flag_unreadable":
-        updated = serverStore.flagUnreadable(resultId, reason || "Handwriting illegible or smudged", effectiveTeacherName);
+        updated = await (store as any).flagUnreadable(resultId, reason || "Handwriting illegible or smudged", effectiveTeacherName, teacher.id);
         break;
       case "correct_match":
         if (!newQuestionId) {
           return NextResponse.json({ error: "newQuestionId required for match correction" }, { status: 400 });
         }
-        updated = serverStore.correctMatch(resultId, newQuestionId, reason || "Teacher corrected question match", effectiveTeacherName);
+        updated = await (store as any).correctMatch(resultId, newQuestionId, reason || "Teacher corrected question match", effectiveTeacherName, teacher.id);
         break;
       case "reject_proposal":
-        updated = serverStore.rejectProposal(resultId, reason || "Teacher rejected proposed evaluation", effectiveTeacherName);
+        updated = await (store as any).rejectProposal(resultId, reason || "Teacher rejected proposed evaluation", effectiveTeacherName, teacher.id);
         break;
       case "approve":
-        updated = serverStore.approveGradingResult(resultId, finalScore, reason, effectiveTeacherName);
+        updated = await (store as any).approveGradingResult(resultId, finalScore, reason, effectiveTeacherName, teacher.id);
         break;
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
