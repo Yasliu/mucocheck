@@ -1,8 +1,15 @@
 import { NextResponse } from "next/server";
 import { savePrivateFile, validateUploadedFile } from "@/lib/storage/file-storage";
+import {
+  getAuthenticatedTeacher,
+  unauthorizedResponse,
+} from "@/lib/auth/server-auth";
 
 export async function POST(req: Request) {
   try {
+    const teacher = await getAuthenticatedTeacher(req);
+    if (!teacher) return unauthorizedResponse();
+
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const category = (formData.get("category") as string) || "scripts";
@@ -31,6 +38,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       success: true,
+      teacherId: teacher.id,
       filePath: saved.relativePath,
       fileName: file.name,
       storedName: saved.fileName,

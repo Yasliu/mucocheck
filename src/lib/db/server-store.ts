@@ -92,6 +92,68 @@ class ServerStore {
     }
   }
 
+  // Backup
+  createBackup(label?: string): {
+    backupPath: string;
+    timestamp: string;
+    stats: {
+      assessments: number;
+      students: number;
+      classes: number;
+      scripts: number;
+      results: number;
+    };
+  } {
+    const backupDir = path.join(DATA_DIR, "backups");
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `db-backup-${label ? `${label}-` : ""}${timestamp}.json`;
+    const backupPath = path.join(backupDir, filename);
+    fs.writeFileSync(backupPath, JSON.stringify(this.data, null, 2), "utf-8");
+    return {
+      backupPath,
+      timestamp,
+      stats: {
+        assessments: this.data.assessments.length,
+        students: this.data.students.length,
+        classes: this.data.classes.length,
+        scripts: this.data.scripts.length,
+        results: this.data.results.length,
+      },
+    };
+  }
+
+  // File Authorization & Ownership Lookup
+  getFileOwnerTeacherId(relativePath: string): string | null {
+    const normalized = relativePath.replace(/\\/g, "/");
+
+    // Check in student scripts
+    const script = this.data.scripts.find(
+      (s) => s.file_path === normalized || s.file_path.endsWith(normalized)
+    );
+    if (script) {
+      if (script.teacher_id) return script.teacher_id;
+      const asm = this.getAssessment(script.assessment_id);
+      return asm?.teacher_id || "usr-teacher-001";
+    }
+
+    // Check in assessment papers or marking schemes
+    const asm = this.data.assessments.find(
+      (a) =>
+        (a.question_paper_path &&
+          (a.question_paper_path === normalized || a.question_paper_path.endsWith(normalized))) ||
+        (a.marking_scheme_path &&
+          (a.marking_scheme_path === normalized || a.marking_scheme_path.endsWith(normalized)))
+    );
+    if (asm) {
+      return asm.teacher_id || "usr-teacher-001";
+    }
+
+    return null;
+  }
+
   // Profile
   getProfile(): TeacherProfile {
     return { ...this.data.profile };
@@ -104,24 +166,30 @@ class ServerStore {
   }
 
   // Classes
-  getClasses(): ClassGroup[] {
-    return this.data.classes.map((cls) => {
+  getClasses(teacherId?: string): ClassGroup[] {
+    let list = this.data.classes;
+    if (teacherId) {
+      list = list.filter((cls) => !cls.teacher_id || cls.teacher_id === teacherId);
+    }
+    return list.map((cls) => {
       const count = this.data.students.filter((s) => s.class_id === cls.id).length;
       return { ...cls, student_count: count };
     });
   }
 
-  getClass(id: string): ClassGroup | undefined {
+  getClass(id: string, teacherId?: string): ClassGroup | undefined {
     const cls = this.data.classes.find((c) => c.id === id);
     if (!cls) return undefined;
+    if (teacherId && cls.teacher_id && cls.teacher_id !== teacherId) return undefined;
     const count = this.data.students.filter((s) => s.class_id === cls.id).length;
     return { ...cls, student_count: count };
   }
 
-  createClass(data: Omit<ClassGroup, "id" | "created_at" | "student_count">): ClassGroup {
+  createClass(data: Omit<ClassGroup, "id" | "created_at" | "student_count"> & { teacher_id?: string }): ClassGroup {
     const newClass: ClassGroup = {
       ...data,
       id: `cls-${Date.now()}`,
+      teacher_id: data.teacher_id || "usr-teacher-001",
       student_count: 0,
       created_at: new Date().toISOString(),
     };
@@ -145,21 +213,29 @@ class ServerStore {
   }
 
   // Students
-  getStudents(classId?: string): Student[] {
+  getStudents(classId?: string, teacherId?: string): Student[] {
+    let list = this.data.students;
     if (classId) {
-      return this.data.students.filter((s) => s.class_id === classId);
+      list = list.filter((s) => s.class_id === classId);
     }
-    return [...this.data.students];
+    if (teacherId) {
+      list = list.filter((s) => !s.teacher_id || s.teacher_id === teacherId);
+    }
+    return [...list];
   }
 
-  getStudent(id: string): Student | undefined {
-    return this.data.students.find((s) => s.id === id);
+  getStudent(id: string, teacherId?: string): Student | undefined {
+    const s = this.data.students.find((stu) => stu.id === id);
+    if (!s) return undefined;
+    if (teacherId && s.teacher_id && s.teacher_id !== teacherId) return undefined;
+    return s;
   }
 
-  createStudent(data: Omit<Student, "id" | "created_at">): Student {
+  createStudent(data: Omit<Student, "id" | "created_at"> & { teacher_id?: string }): Student {
     const newStudent: Student = {
       ...data,
       id: `stu-${Date.now()}`,
+      teacher_id: data.teacher_id || "usr-teacher-001",
       created_at: new Date().toISOString(),
     };
     this.data.students.push(newStudent);
@@ -183,16 +259,23 @@ class ServerStore {
   }
 
   // Assessments
-  getAssessments(): Assessment[] {
+  getAssessments(teacherId?: string): Assessment[] {
+    if (teacherId) {
+      return this.data.assessments.filter((a) => !a.teacher_id || a.teacher_id === teacherId);
+    }
     return [...this.data.assessments];
   }
 
-  getAssessment(id: string): Assessment | undefined {
-    return this.data.assessments.find((a) => a.id === id);
+  getAssessment(id: string, teacherId?: string): Assessment | undefined {
+    const asm = this.data.assessments.find((a) => a.id === id);
+    if (!asm) return undefined;
+    if (teacherId && asm.teacher_id && asm.teacher_id !== teacherId) return undefined;
+    return asm;
   }
 
   createAssessment(data: {
     id?: string;
+    teacher_id?: string;
     title: string;
     subject: string;
     grade_level: string;
@@ -215,6 +298,7 @@ class ServerStore {
     const assessmentId = data.id || `asm-${Date.now()}`;
     const newAssessment: Assessment = {
       id: assessmentId,
+      teacher_id: data.teacher_id || "usr-teacher-001",
       title: data.title,
       subject: data.subject,
       grade_level: data.grade_level,
@@ -305,14 +389,18 @@ class ServerStore {
     return this.data.scripts.find((s) => s.id === id);
   }
 
-  addScript(data: Omit<StudentScript, "id" | "uploaded_at">): StudentScript {
+  addScript(data: Omit<StudentScript, "id" | "uploaded_at"> & { teacher_id?: string }): StudentScript {
     // Check if script already exists for this student and assessment
     const existingIdx = this.data.scripts.findIndex(
       (s) => s.assessment_id === data.assessment_id && s.student_id === data.student_id
     );
 
+    const asm = this.getAssessment(data.assessment_id);
+    const teacherId = data.teacher_id || asm?.teacher_id || "usr-teacher-001";
+
     const script: StudentScript = {
       ...data,
+      teacher_id: teacherId,
       id: existingIdx !== -1 ? this.data.scripts[existingIdx].id : `scr-${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       uploaded_at: new Date().toISOString(),
     };
@@ -323,7 +411,6 @@ class ServerStore {
       this.data.scripts.push(script);
     }
 
-    const asm = this.getAssessment(data.assessment_id);
     if (asm) {
       this.updateAssessment(asm.id, {
         total_scripts: this.getScripts(asm.id).length,

@@ -1,21 +1,36 @@
 import { NextResponse } from "next/server";
 import { serverStore } from "@/lib/db/server-store";
+import {
+  getAuthenticatedTeacher,
+  unauthorizedResponse,
+  forbiddenResponse,
+} from "@/lib/auth/server-auth";
 
 export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-    const body = await req.json();
+    const teacher = await getAuthenticatedTeacher(req);
+    if (!teacher) return unauthorizedResponse();
 
+    const { id } = await params;
     const assessment = serverStore.getAssessment(id);
     if (!assessment) {
       return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
     }
 
+    if (assessment.teacher_id && assessment.teacher_id !== teacher.id) {
+      return forbiddenResponse(
+        "Access denied: You do not have permission to attach scripts to another teacher's assessment."
+      );
+    }
+
+    const body = await req.json();
+
     const script = serverStore.addScript({
       assessment_id: id,
+      teacher_id: teacher.id,
       student_id: body.student_id,
       student_name: body.student_name,
       roll_number: body.roll_number,

@@ -42,6 +42,7 @@ export interface GradeBand {
 
 export interface ClassGroup {
   id: string;
+  teacher_id?: string;
   name: string;
   grade_level: string;
   section: string;
@@ -52,6 +53,7 @@ export interface ClassGroup {
 
 export interface Student {
   id: string;
+  teacher_id?: string;
   class_id: string;
   roll_number: string;
   full_name: string;
@@ -68,6 +70,7 @@ export type AssessmentStatus =
 
 export interface Assessment {
   id: string;
+  teacher_id?: string;
   title: string;
   subject: string;
   grade_level: string;
@@ -88,6 +91,7 @@ export interface Assessment {
 
 export interface StudentScript {
   id: string;
+  teacher_id?: string;
   assessment_id: string;
   student_id: string;
   student_name: string;

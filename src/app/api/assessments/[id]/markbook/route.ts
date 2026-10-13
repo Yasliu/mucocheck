@@ -1,12 +1,31 @@
 import { NextResponse } from "next/server";
 import { serverStore } from "@/lib/db/server-store";
+import {
+  getAuthenticatedTeacher,
+  unauthorizedResponse,
+  forbiddenResponse,
+} from "@/lib/auth/server-auth";
 
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const teacher = await getAuthenticatedTeacher(req);
+    if (!teacher) return unauthorizedResponse();
+
     const { id } = await params;
+    const asm = serverStore.getAssessment(id);
+    if (!asm) {
+      return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
+    }
+
+    if (asm.teacher_id && asm.teacher_id !== teacher.id) {
+      return forbiddenResponse(
+        "Access denied: You do not have permission to access markbooks for another teacher's assessment."
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const targetScaleParam = searchParams.get("targetScaleMax");
     const targetScaleMax = targetScaleParam ? Number(targetScaleParam) : undefined;

@@ -120,6 +120,10 @@ CREATE TABLE IF NOT EXISTS public.grading_results (
     edited_by_teacher BOOLEAN NOT NULL DEFAULT false,
     answer_extracted_text TEXT,
     script_page_index INT DEFAULT 1,
+    is_unreadable BOOLEAN DEFAULT false,
+    unreadable_reason TEXT,
+    is_unmatched BOOLEAN DEFAULT false,
+    audit_history JSONB DEFAULT '[]'::JSONB,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(script_id, question_id)
@@ -216,6 +220,26 @@ CREATE POLICY "Teachers can access own approvals"
     ON public.assessment_approvals FOR ALL
     USING (auth.uid() = teacher_id);
 
--- Private Storage Buckets (Execute via Supabase Dashboard or Migration)
--- INSERT INTO storage.buckets (id, name, public) VALUES ('scripts', 'scripts', false);
--- INSERT INTO storage.buckets (id, name, public) VALUES ('reference_docs', 'reference_docs', false);
+-- 9. Private Storage Buckets & Policies
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('scripts', 'scripts', false)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('reference_docs', 'reference_docs', false)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE POLICY "Teacher storage upload"
+    ON storage.objects FOR INSERT TO authenticated
+    WITH CHECK (
+        bucket_id IN ('scripts', 'reference_docs') AND
+        (storage.foldername(name))[1] = auth.uid()::text
+    );
+
+CREATE POLICY "Teacher storage read"
+    ON storage.objects FOR SELECT TO authenticated
+    USING (
+        bucket_id IN ('scripts', 'reference_docs') AND
+        (storage.foldername(name))[1] = auth.uid()::text
+    );
+
