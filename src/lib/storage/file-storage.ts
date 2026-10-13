@@ -1,52 +1,93 @@
-export interface FileValidationResult {
-  valid: boolean;
-  error?: string;
-}
+import fs from "fs";
+import path from "path";
+import {
+  FileValidationResult,
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE_BYTES,
+  validateUploadedFile,
+} from "./validation";
 
-export const ALLOWED_MIME_TYPES = [
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-];
+export {
+  type FileValidationResult,
+  ALLOWED_MIME_TYPES,
+  MAX_FILE_SIZE_BYTES,
+  validateUploadedFile,
+};
 
-export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
+// Private storage directory on the server
+export const PRIVATE_STORAGE_ROOT = path.join(process.cwd(), ".data", "storage", "uploads");
 
 /**
- * Validates uploaded script or reference documents
+ * Ensures private storage directory structure exists
  */
-export function validateUploadedFile(file: {
-  name: string;
-  size: number;
-  type: string;
-}): FileValidationResult {
-  if (!file) {
-    return { valid: false, error: "No file provided" };
+export function ensureStorageDirectories(): void {
+  const dirs = [
+    PRIVATE_STORAGE_ROOT,
+    path.join(PRIVATE_STORAGE_ROOT, "papers"),
+    path.join(PRIVATE_STORAGE_ROOT, "schemes"),
+    path.join(PRIVATE_STORAGE_ROOT, "scripts"),
+  ];
+
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+}
+
+/**
+ * Saves a file buffer to private storage with a collision-resistant name
+ */
+export async function savePrivateFile(
+  buffer: Buffer,
+  originalFilename: string,
+  subfolder: "papers" | "schemes" | "scripts" = "scripts"
+): Promise<{ relativePath: string; absolutePath: string; fileName: string; size: number }> {
+  ensureStorageDirectories();
+
+  const ext = path.extname(originalFilename).toLowerCase() || ".pdf";
+  const sanitizedBase = path.basename(originalFilename, ext).replace(/[^a-zA-Z0-9_-]/g, "_");
+  const uniqueName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}_${sanitizedBase}${ext}`;
+  const targetDir = path.join(PRIVATE_STORAGE_ROOT, subfolder);
+  const absolutePath = path.join(targetDir, uniqueName);
+
+  await fs.promises.writeFile(absolutePath, buffer);
+
+  const relativePath = path.join(subfolder, uniqueName).replace(/\\/g, "/");
+
+  return {
+    relativePath,
+    absolutePath,
+    fileName: uniqueName,
+    size: buffer.length,
+  };
+}
+
+/**
+ * Retrieves a file buffer from private storage safely
+ */
+export async function getPrivateFile(relativePath: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const normalized = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, "");
+  const absolutePath = path.join(PRIVATE_STORAGE_ROOT, normalized);
+
+  if (!absolutePath.startsWith(PRIVATE_STORAGE_ROOT)) {
+    throw new Error("Access denied: path traversal detected");
   }
 
-  if (file.size <= 0) {
-    return { valid: false, error: "File appears empty (0 bytes)" };
+  if (!fs.existsSync(absolutePath)) {
+    return null;
   }
 
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return {
-      valid: false,
-      error: `File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds the maximum limit of 25MB`,
-    };
-  }
+  const buffer = await fs.promises.readFile(absolutePath);
+  const ext = path.extname(absolutePath).toLowerCase();
 
-  // Normalize MIME type or check extension if mime is generic
-  const ext = file.name.split(".").pop()?.toLowerCase();
-  const validExts = ["pdf", "jpg", "jpeg", "png", "webp"];
+  let mimeType = "application/octet-stream";
+  if (ext === ".pdf") mimeType = "application/pdf";
+  else if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg";
+  else if (ext === ".png") mimeType = "image/png";
+  else if (ext === ".webp") mimeType = "image/webp";
 
-  if (!ALLOWED_MIME_TYPES.includes(file.type) && (!ext || !validExts.includes(ext))) {
-    return {
-      valid: false,
-      error: `Unsupported file format. Please upload PDF, JPEG, or PNG files only.`,
-    };
-  }
-
-  return { valid: true };
+  return { buffer, mimeType };
 }
 
 /**

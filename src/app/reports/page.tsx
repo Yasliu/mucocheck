@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import {
   GraduationCap,
   Printer,
+  Download,
   User,
   BookOpen,
   Calendar,
@@ -20,15 +21,44 @@ export default function ReportCardsPage() {
   const [report, setReport] = useState<ReportCardRecord | null>(null);
 
   useEffect(() => {
-    const stuList = repository.getStudents();
-    setStudents(stuList);
-    if (stuList.length > 0) {
-      setSelectedStudentId(stuList[0].id);
+    async function loadStudents() {
+      try {
+        const res = await fetch("/api/students");
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            setStudents(list);
+            setSelectedStudentId(list[0].id);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch students from API, using local repo", err);
+      }
+      const stuList = repository.getStudents();
+      setStudents(stuList);
+      if (stuList.length > 0) {
+        setSelectedStudentId(stuList[0].id);
+      }
     }
+    loadStudents();
   }, []);
 
   useEffect(() => {
-    if (selectedStudentId) {
+    if (!selectedStudentId) return;
+    async function loadReport() {
+      try {
+        const res = await fetch(`/api/reports/${selectedStudentId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.student) {
+            setReport(data);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch report from API, using local repo", err);
+      }
       try {
         const rep = repository.getStudentReportCard(selectedStudentId);
         setReport(rep);
@@ -36,6 +66,7 @@ export default function ReportCardsPage() {
         console.error(e);
       }
     }
+    loadReport();
   }, [selectedStudentId]);
 
   const handlePrint = () => {
@@ -51,11 +82,11 @@ export default function ReportCardsPage() {
             Report Cards
           </h2>
           <p className="text-sm text-[#6E685F] mt-1">
-            Generate clean, printable official student academic evaluation sheets.
+            Generate clean, printable official student academic evaluation sheets and downloadable PDFs.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xs text-[#6E685F]">Select Student:</span>
             <select
@@ -70,6 +101,17 @@ export default function ReportCardsPage() {
               ))}
             </select>
           </div>
+
+          {selectedStudentId && (
+            <a
+              href={`/api/reports/${selectedStudentId}/pdf`}
+              download={`report-${selectedStudentId}.pdf`}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#E8E2D5] bg-[#FFFFFF] hover:bg-[#FAF8F3] text-[#1C1A17] text-xs font-medium transition-colors shadow-2xs"
+            >
+              <Download className="w-3.5 h-3.5 text-[#2A5A43]" />
+              <span>Download PDF</span>
+            </a>
+          )}
 
           <button
             onClick={handlePrint}

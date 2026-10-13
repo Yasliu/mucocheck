@@ -18,11 +18,18 @@ import {
   Save,
   CheckCircle2,
   Lock,
+  History,
+  RotateCcw,
+  X,
+  FileQuestion,
+  EyeOff,
+  ThumbsDown,
 } from "lucide-react";
 import { repository } from "@/lib/db/repo";
 import {
   Assessment,
   AssessmentQuestion,
+  AuditRecord,
   GradingResult,
   StudentScript,
 } from "@/lib/types";
@@ -50,31 +57,60 @@ function ReviewWorkspaceContent({
   // Editing state for current question
   const [teacherScore, setTeacherScore] = useState<number | string>("");
   const [teacherFeedback, setTeacherFeedback] = useState<string>("");
+  const [changeReason, setChangeReason] = useState<string>("");
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string>("");
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [zoomLevel, setZoomLevel] = useState<number>(100);
 
+  // Modals for audit operations
+  const [showUnreadableDialog, setShowUnreadableDialog] = useState(false);
+  const [unreadableNote, setUnreadableNote] = useState("Handwriting is smudged/indecipherable in key terms");
+  const [showMatchDialog, setShowMatchDialog] = useState(false);
+  const [newMatchQuestionId, setNewMatchQuestionId] = useState("");
+  const [matchReason, setMatchReason] = useState("Candidate answered out of sequence");
+  const [showAuditDrawer, setShowAuditDrawer] = useState(false);
+
   useEffect(() => {
-    const asm = repository.getAssessment(assessmentId);
-    if (!asm) return;
-    setAssessment(asm);
+    // Fetch from server API with repository fallback
+    async function init() {
+      try {
+        const res = await fetch(`/api/assessments/${assessmentId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setAssessment(data.assessment);
+          setQuestions(data.questions);
+          setScripts(data.scripts);
+          setResults(data.results);
+          if (data.questions.length > 0) {
+            setSelectedQuestionId(data.questions[0].id);
+          }
+          if (initialScriptId) {
+            const idx = data.scripts.findIndex((s: StudentScript) => s.id === initialScriptId);
+            if (idx !== -1) setCurrentScriptIndex(idx);
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn("API fetch error, falling back to repository:", err);
+      }
 
-    const qList = repository.getQuestions(assessmentId);
-    setQuestions(qList);
-    if (qList.length > 0) {
-      setSelectedQuestionId(qList[0].id);
+      // Fallback
+      const asm = repository.getAssessment(assessmentId);
+      if (!asm) return;
+      setAssessment(asm);
+      const qList = repository.getQuestions(assessmentId);
+      setQuestions(qList);
+      if (qList.length > 0) setSelectedQuestionId(qList[0].id);
+      const scrList = repository.getScripts(assessmentId);
+      setScripts(scrList);
+      if (initialScriptId) {
+        const idx = scrList.findIndex((s) => s.id === initialScriptId);
+        if (idx !== -1) setCurrentScriptIndex(idx);
+      }
+      setResults(repository.getGradingResults(assessmentId));
     }
 
-    const scrList = repository.getScripts(assessmentId);
-    setScripts(scrList);
-
-    if (initialScriptId) {
-      const idx = scrList.findIndex((s) => s.id === initialScriptId);
-      if (idx !== -1) setCurrentScriptIndex(idx);
-    }
-
-    const allResults = repository.getGradingResults(assessmentId);
-    setResults(allResults);
+    init();
   }, [assessmentId, initialScriptId]);
 
   const currentScript = scripts[currentScriptIndex];
@@ -93,12 +129,13 @@ function ReviewWorkspaceContent({
           : currentResult.proposed_score
       );
       setTeacherFeedback(currentResult.feedback || "");
+      setChangeReason("");
       setErrorMsg("");
       setSaveSuccessMsg("");
     }
   }, [currentResult]);
 
-  const handleSaveAndApprove = (markAsApproved = true) => {
+  const handleSaveAndApprove = async (markAsApproved = true) => {
     if (!currentResult || !currentQuestion) return;
 
     const numScore = Number(teacherScore);
@@ -108,40 +145,193 @@ function ReviewWorkspaceContent({
       return;
     }
 
+    const isScoreChanged =
+      currentResult.approved_score !== null
+        ? currentResult.approved_score !== numScore
+        : currentResult.proposed_score !== numScore;
+
+    const reasonToRecord =
+      changeReason.trim() ||
+      (isScoreChanged ? "Teacher modified proposed mark" : markAsApproved ? "Teacher verified proposed mark" : "Flagged for teacher review");
+
     try {
-      const updated = repository.updateGradingResult(currentResult.id, {
-        approved_score: numScore,
-        feedback: teacherFeedback,
-        status: markAsApproved ? "approved" : "needs_review",
-        edited_by_teacher: true,
+      // 1. Send update to server API
+      const response = await fetch(`/api/results/${currentResult.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          approved_score: numScore,
+          feedback: teacherFeedback,
+          status: markAsApproved ? "approved" : "needs_review",
+          edited_by_teacher: true,
+          reason: reasonToRecord,
+          teacher_name: "Dr. Eleanor Vance",
+        }),
       });
+
+      let updatedResult: GradingResult;
+      if (response.ok) {
+        const resData = await response.json();
+        updatedResult = resData.result;
+      } else {
+        // Local repository fallback
+        updatedResult = repository.updateGradingResult(currentResult.id, {
+          approved_score: numScore,
+          feedback: teacherFeedback,
+          status: markAsApproved ? "approved" : "needs_review",
+          edited_by_teacher: true,
+        });
+      }
 
       // Update state
       setResults((prev) =>
-        prev.map((r) => (r.id === updated.id ? updated : r))
+        prev.map((r) => (r.id === updatedResult.id ? updatedResult : r))
       );
 
-      // Refresh assessment and scripts in state
-      setAssessment(repository.getAssessment(assessmentId)!);
-      setScripts(repository.getScripts(assessmentId));
+      // Re-fetch assessment status
+      const asmRes = await fetch(`/api/assessments/${assessmentId}`);
+      if (asmRes.ok) {
+        const d = await asmRes.json();
+        setAssessment(d.assessment);
+        setScripts(d.scripts);
+      }
 
       setSaveSuccessMsg(
-        markAsApproved ? "Score approved and recorded." : "Flagged for further review."
+        markAsApproved ? "Score approved and saved to audit trail." : "Flagged for further review."
       );
-      setTimeout(() => setSaveSuccessMsg(""), 3000);
+      setChangeReason("");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
     }
   };
 
-  const handleApproveAllForScript = () => {
+  const handleFlagUnreadableConfirm = async () => {
+    if (!currentResult) return;
+    try {
+      const response = await fetch("/api/results/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "flag_unreadable",
+          resultId: currentResult.id,
+          reason: unreadableNote,
+          teacherName: "Dr. Eleanor Vance",
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setResults((prev) =>
+          prev.map((r) => (r.id === data.result.id ? data.result : r))
+        );
+      } else {
+        const fallback = repository.updateGradingResult(currentResult.id, {
+          status: "needs_review",
+          feedback: `Flagged as unreadable: ${unreadableNote}`,
+        });
+        setResults((prev) => prev.map((r) => (r.id === fallback.id ? fallback : r)));
+      }
+
+      setShowUnreadableDialog(false);
+      setSaveSuccessMsg("Answer flagged as unreadable with audit reason.");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
+    } catch (err) {
+      alert("Error flagging unreadable answer");
+    }
+  };
+
+  const handleCorrectMatchConfirm = async () => {
+    if (!currentResult || !newMatchQuestionId) return;
+    try {
+      const response = await fetch("/api/results/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "correct_match",
+          resultId: currentResult.id,
+          newQuestionId: newMatchQuestionId,
+          reason: matchReason,
+          teacherName: "Dr. Eleanor Vance",
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setResults((prev) =>
+          prev.map((r) => (r.id === data.result.id ? data.result : r))
+        );
+        setSelectedQuestionId(newMatchQuestionId);
+      }
+
+      setShowMatchDialog(false);
+      setSaveSuccessMsg("Question match successfully corrected.");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
+    } catch (err) {
+      alert("Error correcting question match");
+    }
+  };
+
+  const handleRejectProposal = async () => {
+    if (!currentResult) return;
+    const reason = prompt("Enter rationale for rejecting this AI grading proposal:");
+    if (!reason) return;
+
+    try {
+      const response = await fetch("/api/results/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reject_proposal",
+          resultId: currentResult.id,
+          reason,
+          teacherName: "Dr. Eleanor Vance",
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setResults((prev) =>
+          prev.map((r) => (r.id === data.result.id ? data.result : r))
+        );
+      }
+
+      setSaveSuccessMsg("AI proposal rejected and flagged for teacher remark.");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
+    } catch (err) {
+      alert("Error rejecting proposal");
+    }
+  };
+
+  const handleApproveAllForScript = async () => {
     if (!currentScript) return;
-    repository.approveAllResultsForScript(currentScript.id);
-    setResults(repository.getGradingResults(assessmentId));
-    setAssessment(repository.getAssessment(assessmentId)!);
-    setScripts(repository.getScripts(assessmentId));
-    setSaveSuccessMsg("All questions for this script have been approved!");
-    setTimeout(() => setSaveSuccessMsg(""), 3000);
+    try {
+      await fetch("/api/results/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "approve_script",
+          scriptId: currentScript.id,
+          teacherName: "Dr. Eleanor Vance",
+        }),
+      });
+
+      repository.approveAllResultsForScript(currentScript.id);
+
+      // Re-fetch state
+      const res = await fetch(`/api/assessments/${assessmentId}`);
+      if (res.ok) {
+        const d = await res.json();
+        setAssessment(d.assessment);
+        setScripts(d.scripts);
+        setResults(d.results);
+      }
+
+      setSaveSuccessMsg("All question results for this script have been verified and approved!");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
+    } catch (err) {
+      alert("Failed to approve script");
+    }
   };
 
   if (!assessment || scripts.length === 0) {
@@ -223,7 +413,7 @@ function ReviewWorkspaceContent({
 
       {/* Main Split-Screen Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-[680px]">
-        {/* Left Side: Script Document & Handwriting Canvas Preview (7 cols) */}
+        {/* Left Side: Script Document & Answer Preview (7 cols) */}
         <div className="lg:col-span-7 bg-[#FFFFFF] border border-[#E8E2D5] rounded-md flex flex-col shadow-2xs overflow-hidden">
           {/* Viewer Toolbar */}
           <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
@@ -238,6 +428,31 @@ function ReviewWorkspaceContent({
             </div>
 
             <div className="flex items-center gap-2">
+              {/* Match Correction Button */}
+              <button
+                onClick={() => {
+                  setNewMatchQuestionId(selectedQuestionId);
+                  setShowMatchDialog(true);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-[#2A5A43] hover:underline"
+                title="Correct question match"
+              >
+                <FileQuestion className="w-3.5 h-3.5" />
+                <span>Reassign Match</span>
+              </button>
+
+              {/* Flag Unreadable Button */}
+              <button
+                onClick={() => setShowUnreadableDialog(true)}
+                className="inline-flex items-center gap-1 text-[11px] text-[#C25B3E] hover:underline"
+                title="Flag as unreadable"
+              >
+                <EyeOff className="w-3.5 h-3.5" />
+                <span>Flag Unreadable</span>
+              </button>
+
+              <div className="h-3 w-px bg-[#E8E2D5] mx-1" />
+
               <button
                 onClick={() => setZoomLevel((z) => Math.max(75, z - 15))}
                 className="p-1 text-[#6E685F] hover:text-[#1C1A17] rounded"
@@ -268,7 +483,7 @@ function ReviewWorkspaceContent({
               <div className="border-b-2 border-[#1C1A17] pb-3 flex justify-between items-baseline text-xs">
                 <div>
                   <span className="font-bold uppercase tracking-wider text-[11px]">
-                    Candidate Script
+                    Candidate Answer Script
                   </span>
                   <p className="font-sans text-sm font-semibold text-[#1C1A17]">
                     {currentScript?.student_name}
@@ -284,15 +499,22 @@ function ReviewWorkspaceContent({
               <div className="space-y-4">
                 <div className="flex items-center justify-between text-xs font-sans text-[#6E685F]">
                   <span className="font-semibold text-[#1C1A17]">
-                    Question {currentQuestion?.question_number}.
+                    Matched to Question {currentQuestion?.question_number}
                   </span>
                   <span>Max: {currentQuestion?.max_marks} marks</span>
                 </div>
 
                 {/* Simulated Script Content Box */}
                 <div className="p-4 rounded border-2 border-dashed border-[#2A5A43]/30 bg-[#FAF9F5] space-y-3 relative">
-                  <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] bg-[#EFF5F1] text-[#2A5A43] font-sans font-medium border border-[#BCD4C7]">
-                    Detected Answer Region
+                  <div className="flex items-center justify-between">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#EFF5F1] text-[#2A5A43] font-sans font-medium border border-[#BCD4C7]">
+                      Detected Answer Crop: Page {currentQuestion?.question_number || 1}
+                    </span>
+                    {currentResult?.alternative_method_detected && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#FEF7EC] text-[#B2762A] font-sans font-medium border border-[#F3DEC0]">
+                        Valid Alternative Method
+                      </span>
+                    )}
                   </div>
 
                   <p className="font-serif italic text-base leading-relaxed text-[#23211E]">
@@ -306,10 +528,24 @@ function ReviewWorkspaceContent({
                       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                       <div>
                         <strong className="font-semibold">
-                          Low legibility warning on step formula:
+                          Low legibility warning / Ambiguous strokes:
                         </strong>
                         <p className="text-[11px] mt-0.5">
-                          Subscript handwriting shows smudging or irregular strokes. Teacher verification required before approval.
+                          {currentResult.unreadable_reason ||
+                            "Subscript text has heavy pencil smudging. Teacher inspection required before score sign-off."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Unmatched / Blank Answer notice */}
+                  {currentResult?.is_unmatched && (
+                    <div className="mt-3 p-2.5 rounded bg-[#FEF7EC] border border-[#F3DEC0] font-sans text-xs text-[#B2762A] flex items-start gap-2">
+                      <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="font-semibold">Unmatched Question Match:</strong>
+                        <p className="text-[11px] mt-0.5">
+                          No candidate handwriting found for this question on the expected page. If answered elsewhere, use &ldquo;Reassign Match&rdquo;.
                         </p>
                       </div>
                     </div>
@@ -360,7 +596,7 @@ function ReviewWorkspaceContent({
           </div>
 
           {/* Question Body & Rationale */}
-          <div className="flex-1 p-5 space-y-5 overflow-y-auto text-xs">
+          <div className="flex-1 p-5 space-y-4 overflow-y-auto text-xs">
             {/* Question Prompt */}
             <div className="space-y-1">
               <div className="flex items-center justify-between">
@@ -432,7 +668,7 @@ function ReviewWorkspaceContent({
 
                 <div className="text-right space-y-1">
                   <span className="text-[11px] text-[#6E685F] block">
-                    Extraction Status
+                    Evidence Status
                   </span>
                   {currentResult && (
                     <UncertaintyBadge
@@ -453,7 +689,7 @@ function ReviewWorkspaceContent({
               </div>
             </div>
 
-            {/* Teacher Decision & Score Adjustment */}
+            {/* Teacher Decision & Mark Change Audit Reason */}
             <div className="space-y-3 pt-3 border-t border-[#E8E2D5]">
               <div className="flex items-center justify-between">
                 <label className="font-semibold text-[#1C1A17] text-xs">
@@ -477,18 +713,79 @@ function ReviewWorkspaceContent({
                 </span>
               </div>
 
+              {/* Explicit Reason for Mark Change */}
               <div>
                 <label className="font-medium text-[#1C1A17] text-xs block mb-1">
-                  Teacher Feedback & Comments:
+                  Reason for Mark Adjustment (Recorded in Audit Trail):
+                </label>
+                <input
+                  type="text"
+                  value={changeReason}
+                  onChange={(e) => setChangeReason(e.target.value)}
+                  placeholder="e.g. Alternative valid derivation; partial credit on intermediate step"
+                  className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-xs text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
+                />
+              </div>
+
+              {/* Teacher Comments */}
+              <div>
+                <label className="font-medium text-[#1C1A17] text-xs block mb-1">
+                  Teacher Feedback (Visible on Student Report Card):
                 </label>
                 <textarea
                   rows={2}
                   value={teacherFeedback}
                   onChange={(e) => setTeacherFeedback(e.target.value)}
-                  placeholder="Add feedback visible to student and on report cards..."
+                  placeholder="Add feedback visible to student..."
                   className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-xs text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
                 />
               </div>
+
+              {/* View Audit Trail Link */}
+              <div className="flex items-center justify-between pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAuditDrawer(!showAuditDrawer)}
+                  className="inline-flex items-center gap-1 text-[11px] text-[#2A5A43] hover:underline"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  <span>
+                    View Audit History ({currentResult?.audit_history?.length || 0} entries)
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleRejectProposal}
+                  className="inline-flex items-center gap-1 text-[11px] text-[#C25B3E] hover:underline"
+                >
+                  <ThumbsDown className="w-3.5 h-3.5" />
+                  <span>Reject Proposal</span>
+                </button>
+              </div>
+
+              {/* Audit History Drawer */}
+              {showAuditDrawer && currentResult?.audit_history && (
+                <div className="p-2.5 rounded bg-[#FAF8F3] border border-[#E8E2D5] space-y-1.5 text-[11px]">
+                  <p className="font-semibold text-[#1C1A17]">Review Log:</p>
+                  {currentResult.audit_history.length === 0 ? (
+                    <p className="text-[#8E877D] italic">No edits recorded yet.</p>
+                  ) : (
+                    currentResult.audit_history.map((a) => (
+                      <div key={a.id} className="border-b border-[#E8E2D5] pb-1">
+                        <span className="font-mono text-[#6E685F]">
+                          {new Date(a.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>{" "}
+                        — <strong className="capitalize">{a.action.replace("_", " ")}</strong> by {a.teacher_name}
+                        {a.previous_score !== undefined && a.new_score !== undefined && (
+                          <span className="text-[#1C1A17]"> ({a.previous_score} &rarr; {a.new_score}m)</span>
+                        )}
+                        {a.reason && <p className="italic text-[#6E685F] mt-0.5">&ldquo;{a.reason}&rdquo;</p>}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
 
               {errorMsg && (
                 <div className="p-2 rounded bg-[#FDF2EE] border border-[#F1CDC3] text-xs text-[#C25B3E]">
@@ -523,6 +820,125 @@ function ReviewWorkspaceContent({
           </div>
         </div>
       </div>
+
+      {/* Dialog: Flag Unreadable Handwriting */}
+      {showUnreadableDialog && (
+        <div className="fixed inset-0 z-50 bg-[#1C1A17]/40 flex items-center justify-center p-4">
+          <div className="bg-[#FFFFFF] rounded-md max-w-md w-full p-5 space-y-4 shadow-lg border border-[#E8E2D5] text-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E8E2D5]">
+              <h3 className="font-serif text-base font-semibold text-[#1C1A17] flex items-center gap-1.5">
+                <EyeOff className="w-4 h-4 text-[#C25B3E]" />
+                <span>Flag Answer as Unreadable</span>
+              </h3>
+              <button
+                onClick={() => setShowUnreadableDialog(false)}
+                className="p-1 text-[#8E877D] hover:text-[#1C1A17]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-[#6E685F]">
+              Record the specific handwriting legibility issue for this answer. This prevents unverified score deduction and flags it for physical script inspection.
+            </p>
+
+            <div>
+              <label className="font-medium text-[#1C1A17] block mb-1">
+                Reason / Note for Audit Log:
+              </label>
+              <textarea
+                rows={3}
+                value={unreadableNote}
+                onChange={(e) => setUnreadableNote(e.target.value)}
+                className="w-full p-2 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-xs text-[#1C1A17]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowUnreadableDialog(false)}
+                className="px-3 py-1.5 rounded border border-[#E8E2D5] text-xs font-medium text-[#6E685F]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleFlagUnreadableConfirm}
+                className="px-3 py-1.5 rounded bg-[#C25B3E] hover:bg-[#A84A30] text-xs font-medium text-[#FFFFFF]"
+              >
+                Flag as Unreadable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog: Reassign Question Match */}
+      {showMatchDialog && (
+        <div className="fixed inset-0 z-50 bg-[#1C1A17]/40 flex items-center justify-center p-4">
+          <div className="bg-[#FFFFFF] rounded-md max-w-md w-full p-5 space-y-4 shadow-lg border border-[#E8E2D5] text-xs">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E8E2D5]">
+              <h3 className="font-serif text-base font-semibold text-[#1C1A17] flex items-center gap-1.5">
+                <FileQuestion className="w-4 h-4 text-[#2A5A43]" />
+                <span>Reassign Question Match</span>
+              </h3>
+              <button
+                onClick={() => setShowMatchDialog(false)}
+                className="p-1 text-[#8E877D] hover:text-[#1C1A17]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-[#6E685F]">
+              If the candidate answered questions out of order, you can re-route this answer crop to the intended question rubric.
+            </p>
+
+            <div>
+              <label className="font-medium text-[#1C1A17] block mb-1">
+                Reassign to Question:
+              </label>
+              <select
+                value={newMatchQuestionId}
+                onChange={(e) => setNewMatchQuestionId(e.target.value)}
+                className="w-full p-2 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-xs text-[#1C1A17]"
+              >
+                {questions.map((q) => (
+                  <option key={q.id} value={q.id}>
+                    Question {q.question_number} ({q.max_marks}m) — {q.question_text.slice(0, 45)}...
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="font-medium text-[#1C1A17] block mb-1">
+                Reason for Reassignment:
+              </label>
+              <input
+                type="text"
+                value={matchReason}
+                onChange={(e) => setMatchReason(e.target.value)}
+                className="w-full p-2 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-xs text-[#1C1A17]"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowMatchDialog(false)}
+                className="px-3 py-1.5 rounded border border-[#E8E2D5] text-xs font-medium text-[#6E685F]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCorrectMatchConfirm}
+                className="px-3 py-1.5 rounded bg-[#2A5A43] hover:bg-[#214734] text-xs font-medium text-[#FFFFFF]"
+              >
+                Confirm Reassignment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -97,6 +97,7 @@ async function runVerification() {
     questionId: "q-test-5",
     questionNumber: 5, // Triggers handwriting uncertainty in mock provider
     questionText: "Derive reaction rate law.",
+    studentAnswerText: "r = k[A]^alpha[B]^beta with ambiguous cursive exponents",
     maxMarks: 10,
     rubricCriteria: [{ id: "c1", criterion: "Rate constant", marks: 10 }],
     studentId: "stu-001",
@@ -155,6 +156,152 @@ async function runVerification() {
   assert(reportCard.student.full_name === "Aiden Montgomery", "Fetched student report card");
   assert(reportCard.assessments.length > 0, "Included assessment records");
   assert(reportCard.overall_percentage !== null, "Calculated overall percentage");
+
+  // 8. File Storage Validation & Retrieval
+  console.log("\n--- 8. File Storage & MIME Validation ---");
+  const { savePrivateFile, getPrivateFile, validateUploadedFile } = await import("../src/lib/storage/file-storage");
+  const samplePdfBytes = Buffer.from("%PDF-1.4 sample content for testing purposes");
+  const saveResult = await savePrivateFile(samplePdfBytes, "midterm-scheme.pdf", "schemes");
+  assert(saveResult.relativePath.startsWith("schemes/"), "Stored in requested schemes/ subfolder");
+  assert(saveResult.size === samplePdfBytes.length, "Recorded correct byte size");
+
+  const retrievedFile = await getPrivateFile(saveResult.relativePath);
+  assert(retrievedFile !== null, "Successfully retrieved stored file");
+  assert(retrievedFile?.mimeType === "application/pdf", "Retrieved correct MIME type");
+
+  const validationResult = validateUploadedFile({
+    name: "malicious.exe",
+    size: 1024,
+    type: "application/x-msdownload",
+  });
+  assert(!validationResult.valid, "Rejects disallowed file types (.exe)");
+
+  // 9. ServerStore Persistence & Draft Lifecycle
+  console.log("\n--- 9. ServerStore Persistence & Draft Lifecycle ---");
+  const { serverStore } = await import("../src/lib/db/server-store");
+  const draftAssessment = serverStore.createAssessment({
+    title: "Grade 10 Chemistry Pop Quiz",
+    subject: "Chemistry",
+    grade_level: "Grade 10",
+    section: "A",
+    class_id: "cls-bio-10a",
+    date: "2026-10-14",
+    max_marks: 30,
+    status: "draft",
+    questions: [
+      { question_number: 1, max_marks: 10, question_text: "Balance H2 + O2" },
+      { question_number: 2, max_marks: 20, question_text: "Calculate molar mass" },
+    ],
+  });
+  assert(draftAssessment.status === "draft", "Saved assessment as draft");
+
+  // Reopen draft from serverStore
+  const reopenedDraft = serverStore.getAssessment(draftAssessment.id);
+  assert(reopenedDraft !== null, "Reopened draft without losing state");
+  const draftQuestions = serverStore.getQuestions(draftAssessment.id);
+  assert(draftQuestions.length === 2, "Questions preserved in draft");
+
+  // Update draft to ready
+  const readyAssessment = serverStore.updateAssessment(draftAssessment.id, {
+    status: "ready",
+  });
+  assert(readyAssessment?.status === "ready", "Successfully progressed assessment status from draft to ready");
+
+  // 10. Audit Trail & Teacher Overrides
+  console.log("\n--- 10. Audit Trail & Teacher Overrides ---");
+  const testScript = serverStore.addScript({
+    assessment_id: draftAssessment.id,
+    student_id: "stu-001",
+    student_name: "Aiden Montgomery",
+    roll_number: "BIO-101",
+    file_name: "aiden_chem.pdf",
+    file_path: saveResult.relativePath,
+    file_size: saveResult.size,
+    mime_type: "application/pdf",
+    page_count: 1,
+    status: "graded",
+    total_score: 7.0,
+    max_score: 30,
+    percentage: 23.3,
+  });
+
+  const rawResult = serverStore.addGradingResult({
+    assessment_id: draftAssessment.id,
+    student_id: "stu-001",
+    script_id: testScript.id,
+    question_id: draftQuestions[0].id,
+    proposed_score: 7.0,
+    approved_score: null,
+    rationale: "Correct chemical equation but missing state symbols.",
+    uncertainty_status: "medium_confidence",
+    confidence_score: 0.82,
+    criteria_satisfied: ["Balanced equation"],
+    feedback: "Review chemical state symbols.",
+    status: "proposed",
+    is_mock: true,
+    edited_by_teacher: false,
+    audit_history: [],
+    created_at: new Date().toISOString(),
+  });
+
+  assert(rawResult.proposed_score === 7.0, "AI proposed score recorded");
+  assert(rawResult.approved_score === null, "Approved score initially null");
+
+  // Teacher modifies score with rationale
+  const auditedResult = serverStore.updateGradingResult(rawResult.id, {
+    approved_score: 8.5,
+    feedback: "Awarded 1.5 partial credit for state symbols in rough work margin.",
+    reason: "State symbols present in margin",
+    status: "approved",
+  });
+
+  assert(auditedResult?.approved_score === 8.5, "Teacher approved score updated");
+  assert(auditedResult?.proposed_score === 7.0, "Original AI proposed score preserved");
+  assert((auditedResult?.audit_history?.length || 0) > 0, "Audit trail logged change history");
+  assert(
+    auditedResult?.audit_history?.[0]?.reason === "State symbols present in margin",
+    "Audit trail recorded exact teacher rationale"
+  );
+
+  // 11. Review Controls: Question Reassignment & Unreadable Answer
+  console.log("\n--- 11. Question Reassignment & Unreadable Flagging ---");
+  // Reassign to question 2
+  const reassignedResult = serverStore.reassignQuestionMatch(
+    rawResult.id,
+    draftQuestions[1].id,
+    "Candidate answered Q2 at top of page"
+  );
+  assert(reassignedResult?.question_id === draftQuestions[1].id, "Question match correctly reassigned");
+  assert(reassignedResult?.audit_history?.some((a) => a.action === "corrected_match") === true, "Logged corrected_match in audit history");
+
+  // Flag as unreadable
+  const unreadableResult = serverStore.markAnswerUnreadable(
+    rawResult.id,
+    "Ink smudge across answer calculation"
+  );
+  assert(unreadableResult?.status === "needs_review", "Marked status as needs_review");
+  assert(unreadableResult?.is_unreadable === true, "Flagged with is_unreadable = true");
+
+  // 12. Deterministic Raw-to-Scale Conversion in Markbook
+  console.log("\n--- 12. Raw-to-Scale Conversion in Markbook ---");
+  const scaledMarkbook = serverStore.getMarkbook(draftAssessment.id, 100);
+  assert(scaledMarkbook.targetScaleMax === 100, "Markbook recognizes target scale max 100");
+  assert(scaledMarkbook.rows.length >= 1, "Generated markbook rows for class roster");
+
+  // Aiden has score 8.5 on Q2 (max 20) -> 8.5 / 30 = 28.3% -> scaled to 100 is 28.3
+  const candidateRow = scaledMarkbook.rows.find((r) => r.student.id === "stu-001");
+  assert(candidateRow !== undefined, "Found candidate row in markbook");
+  assert(candidateRow?.raw_total === 8.5, "Candidate raw total is 8.5");
+  assert(candidateRow?.converted_total !== undefined, "Calculated converted total");
+
+  // 13. Printable PDF Generation
+  console.log("\n--- 13. PDF Report Generation ---");
+  const { generateReportCardPdf } = await import("../src/lib/reports/pdf-generator");
+  const sampleReportCard = serverStore.getStudentReportCard("stu-001");
+  const pdfBuffer = await generateReportCardPdf(sampleReportCard);
+  assert(Buffer.isBuffer(pdfBuffer), "Generated PDF as Buffer");
+  assert(pdfBuffer.length > 500, "PDF buffer has realistic document size");
+  assert(pdfBuffer.subarray(0, 5).toString("ascii") === "%PDF-", "PDF begins with standard %PDF- header");
 
   console.log(`\n==================================================`);
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);

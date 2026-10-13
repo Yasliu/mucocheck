@@ -862,10 +862,11 @@ class Repository {
   }
 
   // Markbook Matrix Computation
-  getMarkbook(assessmentId: string): {
+  getMarkbook(assessmentId: string, targetScaleMax?: number): {
     assessment: Assessment;
     questions: AssessmentQuestion[];
     rows: MarkbookRow[];
+    targetScaleMax?: number;
     stats: {
       averageScore: number | null;
       highestScore: number | null;
@@ -914,7 +915,7 @@ class Repository {
         }
       }
 
-      const totals = calculateStudentTotals(scoreItems, undefined, this.profile.rounding_mode);
+      const totals = calculateStudentTotals(scoreItems, targetScaleMax, this.profile.rounding_mode);
 
       // Determine overall student approval status
       let approvalStatus: MarkbookRow["approval_status"] = "draft";
@@ -935,6 +936,7 @@ class Repository {
         question_scores,
         raw_total: totals.rawTotal,
         percentage: totals.percentage,
+        converted_total: totals.convertedTotal,
         approval_status: approvalStatus,
         has_unattempted_or_missing: totals.hasMissing,
       };
@@ -951,6 +953,7 @@ class Repository {
       assessment,
       questions,
       rows,
+      targetScaleMax,
       stats: {
         averageScore: avg !== null ? Math.round(avg * 10) / 10 : null,
         highestScore: highest,

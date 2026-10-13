@@ -147,6 +147,7 @@ Output JSON only with keys: proposedMarks (number), rationale (string), criteria
         totalProposed: Math.round(totalProposed * 10) / 10,
         maxPossible,
         uncertainQuestionsCount: uncertainCount,
+        unmatchedQuestionsCount: 0,
       },
     };
   }

@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -14,10 +14,13 @@ import {
   Plus,
   Eye,
   Sparkles,
+  Save,
+  CheckCircle2,
+  Loader2,
 } from "lucide-react";
 import { repository } from "@/lib/db/repo";
 import { ClassGroup, Student } from "@/lib/types";
-import { validateUploadedFile } from "@/lib/storage/file-storage";
+import { validateUploadedFile } from "@/lib/storage/validation";
 
 interface QuestionInput {
   question_number: number;
@@ -28,21 +31,26 @@ interface QuestionInput {
 
 interface UploadedFileItem {
   id: string;
-  file: File;
   name: string;
   size: number;
   type: string;
   studentId?: string;
   studentName?: string;
+  filePath?: string;
   progress: number;
   previewUrl?: string;
 }
 
-export default function NewAssessmentPage() {
+function NewAssessmentContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const draftId = searchParams.get("draftId");
+
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [classes, setClasses] = useState<ClassGroup[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
+  const [draftAssessmentId, setDraftAssessmentId] = useState<string>(draftId || "");
+  const [draftSavedNotice, setDraftSavedNotice] = useState<string>("");
 
   // Step 1: Metadata
   const [title, setTitle] = useState("");
@@ -55,7 +63,11 @@ export default function NewAssessmentPage() {
 
   // Step 2: Reference Docs & Questions
   const [questionPaperFile, setQuestionPaperFile] = useState<File | null>(null);
+  const [questionPaperPath, setQuestionPaperPath] = useState<string>("");
   const [markingSchemeFile, setMarkingSchemeFile] = useState<File | null>(null);
+  const [markingSchemePath, setMarkingSchemePath] = useState<string>("");
+  const [uploadingRef, setUploadingRef] = useState<boolean>(false);
+
   const [questions, setQuestions] = useState<QuestionInput[]>([
     {
       question_number: 1,
@@ -80,25 +92,93 @@ export default function NewAssessmentPage() {
   // Step 3: Student Scripts
   const [scriptFiles, setScriptFiles] = useState<UploadedFileItem[]>([]);
   const [selectedStudentForUpload, setSelectedStudentForUpload] = useState("");
+  const [uploadingScripts, setUploadingScripts] = useState(false);
 
   // Validation Errors
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const clsList = repository.getClasses();
-    setClasses(clsList);
-    if (clsList.length > 0) {
-      setSelectedClassId(clsList[0].id);
-      setGradeLevel(clsList[0].grade_level);
-      setSection(clsList[0].section);
-      const stus = repository.getStudents(clsList[0].id);
-      setStudents(stus);
-      if (stus.length > 0) {
-        setSelectedStudentForUpload(stus[0].id);
+    async function loadInitial() {
+      // Fetch classes
+      try {
+        const res = await fetch("/api/classes");
+        if (res.ok) {
+          const data = await res.json();
+          setClasses(data.classes);
+          if (data.classes.length > 0 && !selectedClassId) {
+            setSelectedClassId(data.classes[0].id);
+            setGradeLevel(data.classes[0].grade_level);
+            setSection(data.classes[0].section);
+          }
+        } else {
+          setClasses(repository.getClasses());
+        }
+      } catch {
+        setClasses(repository.getClasses());
+      }
+
+      // Check if resuming draft
+      if (draftId) {
+        try {
+          const asmRes = await fetch(`/api/assessments/${draftId}`);
+          if (asmRes.ok) {
+            const data = await asmRes.json();
+            const a = data.assessment;
+            setTitle(a.title);
+            setSubject(a.subject);
+            setGradeLevel(a.grade_level);
+            setSection(a.section);
+            setMaxMarks(a.max_marks);
+            setDate(a.date);
+            if (a.class_id) setSelectedClassId(a.class_id);
+            if (a.question_paper_path) setQuestionPaperPath(a.question_paper_path);
+            if (a.marking_scheme_path) setMarkingSchemePath(a.marking_scheme_path);
+            if (data.questions && data.questions.length > 0) {
+              setQuestions(
+                data.questions.map((q: any) => ({
+                  question_number: q.question_number,
+                  question_text: q.question_text,
+                  max_marks: q.max_marks,
+                  criteria_text: q.rubric_criteria?.map((c: any) => c.criterion).join(", ") || "",
+                }))
+              );
+            }
+          }
+        } catch (e) {
+          console.warn("Draft fetch error:", e);
+        }
       }
     }
-  }, []);
+
+    loadInitial();
+  }, [draftId]);
+
+  useEffect(() => {
+    if (selectedClassId) {
+      async function loadStudents() {
+        try {
+          const res = await fetch(`/api/students?classId=${selectedClassId}`);
+          if (res.ok) {
+            const data = await res.json();
+            setStudents(data.students);
+            if (data.students.length > 0) {
+              setSelectedStudentForUpload(data.students[0].id);
+            }
+          } else {
+            const stus = repository.getStudents(selectedClassId);
+            setStudents(stus);
+            if (stus.length > 0) setSelectedStudentForUpload(stus[0].id);
+          }
+        } catch {
+          const stus = repository.getStudents(selectedClassId);
+          setStudents(stus);
+          if (stus.length > 0) setSelectedStudentForUpload(stus[0].id);
+        }
+      }
+      loadStudents();
+    }
+  }, [selectedClassId]);
 
   const handleClassChange = (classId: string) => {
     setSelectedClassId(classId);
@@ -106,11 +186,6 @@ export default function NewAssessmentPage() {
     if (cls) {
       setGradeLevel(cls.grade_level);
       setSection(cls.section);
-    }
-    const stus = repository.getStudents(classId);
-    setStudents(stus);
-    if (stus.length > 0) {
-      setSelectedStudentForUpload(stus[0].id);
     }
   };
 
@@ -129,9 +204,7 @@ export default function NewAssessmentPage() {
 
   const handleRemoveQuestion = (idx: number) => {
     const updated = questions.filter((_, i) => i !== idx);
-    setQuestions(
-      updated.map((q, i) => ({ ...q, question_number: i + 1 }))
-    );
+    setQuestions(updated.map((q, i) => ({ ...q, question_number: i + 1 })));
   };
 
   const handleQuestionChange = (idx: number, field: keyof QuestionInput, value: string | number) => {
@@ -140,9 +213,84 @@ export default function NewAssessmentPage() {
     setQuestions(updated);
   };
 
-  const handleScriptUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Upload Question Paper to private storage
+  const handleUploadQuestionPaper = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const val = validateUploadedFile(file);
+    if (!val.valid) {
+      alert(val.error);
+      return;
+    }
+
+    setUploadingRef(true);
+    setQuestionPaperFile(file);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", "papers");
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setQuestionPaperPath(data.filePath);
+      } else {
+        alert("Failed to upload question paper to server storage");
+      }
+    } catch {
+      alert("Error uploading question paper");
+    } finally {
+      setUploadingRef(false);
+    }
+  };
+
+  // Upload Marking Scheme to private storage
+  const handleUploadMarkingScheme = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const val = validateUploadedFile(file);
+    if (!val.valid) {
+      alert(val.error);
+      return;
+    }
+
+    setUploadingRef(true);
+    setMarkingSchemeFile(file);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("category", "schemes");
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setMarkingSchemePath(data.filePath);
+      } else {
+        alert("Failed to upload marking scheme to server storage");
+      }
+    } catch {
+      alert("Error uploading marking scheme");
+    } finally {
+      setUploadingRef(false);
+    }
+  };
+
+  // Upload student scripts with physical persistence to private server storage
+  const handleScriptUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
+    setUploadingScripts(true);
+
     const newItems: UploadedFileItem[] = [];
 
     for (const f of files) {
@@ -153,25 +301,38 @@ export default function NewAssessmentPage() {
       }
 
       const assignedStudent = students.find((s) => s.id === selectedStudentForUpload);
-      let previewUrl: string | undefined;
-      if (f.type.startsWith("image/")) {
-        previewUrl = URL.createObjectURL(f);
-      }
 
-      newItems.push({
-        id: `upl-${Date.now()}-${Math.random()}`,
-        file: f,
-        name: f.name,
-        size: f.size,
-        type: f.type,
-        studentId: assignedStudent?.id,
-        studentName: assignedStudent?.full_name || "Unassigned Student",
-        progress: 100,
-        previewUrl,
-      });
+      try {
+        const formData = new FormData();
+        formData.append("file", f);
+        formData.append("category", "scripts");
+
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          newItems.push({
+            id: `upl-${Date.now()}-${Math.random()}`,
+            name: f.name,
+            size: f.size,
+            type: f.type,
+            studentId: assignedStudent?.id,
+            studentName: assignedStudent?.full_name || "Candidate",
+            filePath: data.filePath,
+            progress: 100,
+            previewUrl: data.url,
+          });
+        }
+      } catch (err) {
+        console.error("Script upload failed:", err);
+      }
     }
 
-    setScriptFiles([...scriptFiles, ...newItems]);
+    setScriptFiles((prev) => [...prev, ...newItems]);
+    setUploadingScripts(false);
   };
 
   const handleRemoveScript = (id: string) => {
@@ -207,22 +368,25 @@ export default function NewAssessmentPage() {
     setCurrentStep((prev) => Math.min(4, prev + 1));
   };
 
-  const handleFinalSubmit = () => {
+  // Save Draft (Available at any step)
+  const handleSaveDraft = async () => {
     setIsSubmitting(true);
     try {
-      // 1. Create Assessment
-      const createdAssessment = repository.createAssessment({
-        title,
-        subject,
+      const assessmentId = draftAssessmentId || `asm-${Date.now()}`;
+      const payload = {
+        id: assessmentId,
+        title: title.trim() || "Untitled Draft Assessment",
+        subject: subject.trim() || "General",
         grade_level: gradeLevel,
         section,
         class_id: selectedClassId || undefined,
-        max_marks: Number(maxMarks),
+        max_marks: Number(maxMarks) || 50,
+        status: "draft" as const,
         date,
-        question_paper_name: questionPaperFile?.name || "Exam_Paper.pdf",
-        question_paper_path: `/uploads/${questionPaperFile?.name || "Exam_Paper.pdf"}`,
-        marking_scheme_name: markingSchemeFile?.name || "Rubric_Official.pdf",
-        marking_scheme_path: `/uploads/${markingSchemeFile?.name || "Rubric_Official.pdf"}`,
+        question_paper_name: questionPaperFile?.name || (questionPaperPath ? "Exam_Paper.pdf" : undefined),
+        question_paper_path: questionPaperPath || undefined,
+        marking_scheme_name: markingSchemeFile?.name || (markingSchemePath ? "Marking_Rubric.pdf" : undefined),
+        marking_scheme_path: markingSchemePath || undefined,
         questions: questions.map((q) => ({
           question_number: q.question_number,
           question_text: q.question_text,
@@ -233,30 +397,89 @@ export default function NewAssessmentPage() {
             marks: Math.max(1, Math.round(Number(q.max_marks) / (q.criteria_text.split(",").length || 1))),
           })),
         })),
+      };
+
+      const res = await fetch("/api/assessments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
 
-      // 2. Attach scripts if uploaded
+      if (res.ok) {
+        const data = await res.json();
+        setDraftAssessmentId(data.assessment.id);
+        setDraftSavedNotice("Draft saved successfully to private storage. You can resume anytime.");
+        setTimeout(() => setDraftSavedNotice(""), 3500);
+      }
+    } catch {
+      alert("Error saving draft assessment");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Final Publish / Start Processing
+  const handleFinalSubmit = async () => {
+    setIsSubmitting(true);
+    try {
+      const assessmentId = draftAssessmentId || `asm-${Date.now()}`;
+      const payload = {
+        id: assessmentId,
+        title,
+        subject,
+        grade_level: gradeLevel,
+        section,
+        class_id: selectedClassId || undefined,
+        max_marks: Number(maxMarks),
+        status: scriptFiles.length > 0 ? ("awaiting_review" as const) : ("ready" as const),
+        date,
+        question_paper_name: questionPaperFile?.name || (questionPaperPath ? "Exam_Paper.pdf" : undefined),
+        question_paper_path: questionPaperPath || undefined,
+        marking_scheme_name: markingSchemeFile?.name || (markingSchemePath ? "Marking_Rubric.pdf" : undefined),
+        marking_scheme_path: markingSchemePath || undefined,
+        questions: questions.map((q) => ({
+          question_number: q.question_number,
+          question_text: q.question_text,
+          max_marks: Number(q.max_marks),
+          rubric_criteria: q.criteria_text.split(",").map((c, i) => ({
+            id: `crit-${i + 1}`,
+            criterion: c.trim(),
+            marks: Math.max(1, Math.round(Number(q.max_marks) / (q.criteria_text.split(",").length || 1))),
+          })),
+        })),
+      };
+
+      const res = await fetch("/api/assessments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to save assessment to backend");
+      }
+
+      // Attach script files via API
       for (const scr of scriptFiles) {
-        if (scr.studentId) {
-          repository.addScript({
-            assessment_id: createdAssessment.id,
-            student_id: scr.studentId,
-            student_name: scr.studentName || "Student",
-            roll_number: students.find((s) => s.id === scr.studentId)?.roll_number || "BIO-000",
-            file_name: scr.name,
-            file_path: `/uploads/scripts/${scr.name}`,
-            file_size: scr.size,
-            mime_type: scr.type || "application/pdf",
-            page_count: 2,
-            status: "uploaded",
-            total_score: null,
-            max_score: Number(maxMarks),
-            percentage: null,
+        if (scr.studentId && scr.filePath) {
+          await fetch(`/api/assessments/${assessmentId}/scripts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              student_id: scr.studentId,
+              student_name: scr.studentName,
+              roll_number: students.find((s) => s.id === scr.studentId)?.roll_number || "BIO-000",
+              file_name: scr.name,
+              file_path: scr.filePath,
+              file_size: scr.size,
+              mime_type: scr.type || "application/pdf",
+              page_count: 2,
+            }),
           });
         }
       }
 
-      router.push(`/assessments/${createdAssessment.id}`);
+      router.push(`/assessments/${assessmentId}`);
     } catch (err: unknown) {
       alert(`Failed to create assessment: ${err instanceof Error ? err.message : String(err)}`);
       setIsSubmitting(false);
@@ -265,7 +488,7 @@ export default function NewAssessmentPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      {/* Top Breadcrumb & Title */}
+      {/* Top Header & Save Draft Action */}
       <div className="flex items-center justify-between pb-4 border-b border-[#E8E2D5]">
         <div className="flex items-center gap-2">
           <Link
@@ -276,14 +499,31 @@ export default function NewAssessmentPage() {
           </Link>
           <div>
             <h2 className="font-serif text-2xl font-semibold text-[#1C1A17]">
-              New Assessment
+              {draftAssessmentId ? "Edit Assessment" : "New Assessment"}
             </h2>
             <p className="text-xs text-[#6E685F]">
-              Step-by-step guided setup for question papers, rubrics, and answer scripts.
+              Step-by-step guided setup with draft recovery and private storage.
             </p>
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={handleSaveDraft}
+          disabled={isSubmitting}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#E8E2D5] bg-[#FFFFFF] hover:bg-[#FAF8F3] text-xs font-medium text-[#1C1A17] transition-colors shadow-2xs"
+        >
+          <Save className="w-3.5 h-3.5 text-[#2A5A43]" />
+          <span>Save Draft</span>
+        </button>
       </div>
+
+      {draftSavedNotice && (
+        <div className="p-3 rounded bg-[#EFF5F1] border border-[#BCD4C7] text-xs text-[#2A5A43] flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{draftSavedNotice}</span>
+        </div>
+      )}
 
       {/* Step Indicator Progress Bar */}
       <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4">
@@ -337,9 +577,7 @@ export default function NewAssessmentPage() {
                 placeholder="e.g. Cellular Respiration & Photosynthesis Midterm"
                 className="w-full p-2.5 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-sm text-[#1C1A17] focus:outline-hidden focus:border-[#2A5A43]"
               />
-              {errors.title && (
-                <p className="text-xs text-[#C25B3E]">{errors.title}</p>
-              )}
+              {errors.title && <p className="text-xs text-[#C25B3E]">{errors.title}</p>}
             </div>
 
             <div className="space-y-1">
@@ -351,15 +589,11 @@ export default function NewAssessmentPage() {
                 placeholder="e.g. Biology, Chemistry"
                 className="w-full p-2.5 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-sm text-[#1C1A17] focus:outline-hidden focus:border-[#2A5A43]"
               />
-              {errors.subject && (
-                <p className="text-xs text-[#C25B3E]">{errors.subject}</p>
-              )}
+              {errors.subject && <p className="text-xs text-[#C25B3E]">{errors.subject}</p>}
             </div>
 
             <div className="space-y-1">
-              <label className="font-medium text-[#1C1A17]">
-                Assign to Class / Cohort
-              </label>
+              <label className="font-medium text-[#1C1A17]">Assign to Class / Cohort</label>
               <select
                 value={selectedClassId}
                 onChange={(e) => handleClassChange(e.target.value)}
@@ -396,9 +630,7 @@ export default function NewAssessmentPage() {
             </div>
 
             <div className="space-y-1">
-              <label className="font-medium text-[#1C1A17]">
-                Maximum Marks *
-              </label>
+              <label className="font-medium text-[#1C1A17]">Maximum Marks *</label>
               <input
                 type="number"
                 value={maxMarks}
@@ -406,15 +638,11 @@ export default function NewAssessmentPage() {
                 min={1}
                 className="w-full p-2.5 bg-[#FAF8F3] border border-[#E8E2D5] rounded text-sm text-[#1C1A17] focus:outline-hidden focus:border-[#2A5A43]"
               />
-              {errors.maxMarks && (
-                <p className="text-xs text-[#C25B3E]">{errors.maxMarks}</p>
-              )}
+              {errors.maxMarks && <p className="text-xs text-[#C25B3E]">{errors.maxMarks}</p>}
             </div>
 
             <div className="space-y-1">
-              <label className="font-medium text-[#1C1A17]">
-                Assessment Date
-              </label>
+              <label className="font-medium text-[#1C1A17]">Assessment Date</label>
               <input
                 type="date"
                 value={date}
@@ -434,7 +662,7 @@ export default function NewAssessmentPage() {
               2. Question Paper, Rubric & Breakdown
             </h3>
             <p className="text-xs text-[#6E685F] mt-1">
-              Upload the official question paper and configure the per-question marks and criteria.
+              Files are validated and written to private storage on the server.
             </p>
           </div>
 
@@ -446,12 +674,13 @@ export default function NewAssessmentPage() {
                 Question Paper (PDF or Image)
               </p>
               <p className="text-[11px] text-[#6E685F]">
-                {questionPaperFile ? questionPaperFile.name : "Optional master reference"}
+                {questionPaperPath ? `Persisted: ${questionPaperPath}` : "Select master reference"}
               </p>
               <input
                 type="file"
                 accept=".pdf,image/*"
-                onChange={(e) => e.target.files && setQuestionPaperFile(e.target.files[0])}
+                onChange={handleUploadQuestionPaper}
+                disabled={uploadingRef}
                 className="text-xs text-[#6E685F] file:mr-2 file:py-1 file:px-2.5 file:rounded file:border file:border-[#BCD4C7] file:bg-[#EFF5F1] file:text-[#2A5A43] file:text-xs"
               />
             </div>
@@ -462,12 +691,13 @@ export default function NewAssessmentPage() {
                 Marking Scheme / Rubric (PDF or Image)
               </p>
               <p className="text-[11px] text-[#6E685F]">
-                {markingSchemeFile ? markingSchemeFile.name : "Optional answer key"}
+                {markingSchemePath ? `Persisted: ${markingSchemePath}` : "Select answer key"}
               </p>
               <input
                 type="file"
                 accept=".pdf,image/*"
-                onChange={(e) => e.target.files && setMarkingSchemeFile(e.target.files[0])}
+                onChange={handleUploadMarkingScheme}
+                disabled={uploadingRef}
                 className="text-xs text-[#6E685F] file:mr-2 file:py-1 file:px-2.5 file:rounded file:border file:border-[#BCD4C7] file:bg-[#EFF5F1] file:text-[#2A5A43] file:text-xs"
               />
             </div>
@@ -569,7 +799,7 @@ export default function NewAssessmentPage() {
               3. Student Answer Scripts
             </h3>
             <p className="text-xs text-[#6E685F] mt-1">
-              Select student candidate and upload handwritten script files (PDF, PNG, JPG).
+              Files are physically uploaded to private server storage and matched to student records.
             </p>
           </div>
 
@@ -577,7 +807,7 @@ export default function NewAssessmentPage() {
           <div className="p-4 rounded border border-[#E8E2D5] bg-[#FAF8F3] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="flex-1 space-y-1">
               <label className="font-medium text-[#1C1A17] block">
-                Assign upload to Student:
+                Assign upload to Candidate:
               </label>
               <select
                 value={selectedStudentForUpload}
@@ -595,12 +825,13 @@ export default function NewAssessmentPage() {
             <div className="shrink-0 pt-2 sm:pt-4">
               <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-[#2A5A43] hover:bg-[#214734] text-[#FBF9F5] text-xs font-medium cursor-pointer">
                 <Upload className="w-3.5 h-3.5" />
-                <span>Choose Script File</span>
+                <span>{uploadingScripts ? "Uploading to Storage..." : "Upload Script File"}</span>
                 <input
                   type="file"
                   multiple
                   accept=".pdf,image/*"
                   onChange={handleScriptUpload}
+                  disabled={uploadingScripts}
                   className="hidden"
                 />
               </label>
@@ -618,7 +849,7 @@ export default function NewAssessmentPage() {
 
             {scriptFiles.length === 0 ? (
               <div className="py-8 text-center text-[#8E877D] border border-dashed border-[#D2CAB9] rounded-md text-xs">
-                No scripts attached yet. You can attach student scripts now or add them later from the assessment page.
+                No scripts attached yet. Upload scripts now or add them later.
               </div>
             ) : (
               <div className="divide-y divide-[#E8E2D5] border border-[#E8E2D5] rounded-md bg-[#FFFFFF] overflow-hidden text-xs">
@@ -632,7 +863,8 @@ export default function NewAssessmentPage() {
                       <div>
                         <p className="font-medium text-[#1C1A17]">{scr.name}</p>
                         <p className="text-[11px] text-[#6E685F]">
-                          Student: {scr.studentName} • {(scr.size / 1024).toFixed(0)} KB
+                          Student: {scr.studentName} • {(scr.size / 1024).toFixed(0)} KB •{" "}
+                          <span className="font-mono text-[#2A5A43]">Persisted in private storage</span>
                         </p>
                       </div>
                     </div>
@@ -714,7 +946,7 @@ export default function NewAssessmentPage() {
               <span>Assessment Pipeline Architecture</span>
             </div>
             <p className="text-[#2A5A43] leading-relaxed">
-              When created, the workspace stages documents into private storage. Handwriting recognition and grading results will be processed using the configured provider. <strong>Simulated marks are transparently labeled</strong> until teacher sign-off.
+              Documents are safely stored in private storage. Evaluations are staged with the deterministic provider and marked as <strong>AI Proposed</strong> pending teacher sign-off.
             </p>
           </div>
         </div>
@@ -752,10 +984,18 @@ export default function NewAssessmentPage() {
             className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded bg-[#2A5A43] hover:bg-[#214734] text-[#FBF9F5] text-sm font-medium transition-colors shadow-xs"
           >
             <Check className="w-4 h-4" />
-            <span>{isSubmitting ? "Creating Assessment..." : "Create Assessment"}</span>
+            <span>{isSubmitting ? "Finalizing Assessment..." : "Finalize & Open Assessment"}</span>
           </button>
         )}
       </div>
     </div>
+  );
+}
+
+export default function NewAssessmentPage() {
+  return (
+    <Suspense fallback={<div className="py-20 text-center text-xs text-[#6E685F]">Loading assessment wizard...</div>}>
+      <NewAssessmentContent />
+    </Suspense>
   );
 }

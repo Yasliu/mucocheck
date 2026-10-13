@@ -105,6 +105,18 @@ export interface StudentScript {
   simulated_sample_image?: string;
 }
 
+export interface AuditRecord {
+  id: string;
+  timestamp: string;
+  action: "edited_mark" | "approved" | "rejected" | "flagged_unreadable" | "corrected_match";
+  teacher_name: string;
+  previous_score?: number | null;
+  new_score?: number | null;
+  reason?: string;
+  previous_question_id?: string;
+  new_question_id?: string;
+}
+
 export interface GradingResult {
   id: string;
   assessment_id: string;
@@ -123,6 +135,13 @@ export interface GradingResult {
   edited_by_teacher: boolean;
   answer_extracted_text?: string;
   script_page_index?: number;
+  continuation_pages?: number[];
+  is_unmatched?: boolean;
+  is_unreadable?: boolean;
+  unreadable_reason?: string;
+  alternative_method_detected?: boolean;
+  arithmetic_error_detected?: boolean;
+  audit_history?: AuditRecord[];
   created_at: string;
   updated_at: string;
 }

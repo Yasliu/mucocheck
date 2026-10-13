@@ -31,17 +31,22 @@ src/
 │   ├── globals.css                        # Design tokens, variables & print styles
 │   ├── assessments/
 │   │   ├── page.tsx                       # Assessments list & filters
-│   │   ├── new/page.tsx                   # Guided 4-step creation wizard
+│   │   ├── new/page.tsx                   # Guided 4-step creation wizard & draft recovery
 │   │   └── [id]/
-│   │       ├── page.tsx                   # Assessment detail & files
-│   │       ├── review/page.tsx            # Split-screen Grading Review Workspace
-│   │       └── markbook/page.tsx          # Deterministic Markbook matrix & inline editor
+│   │       ├── page.tsx                   # Assessment detail & file management
+│   │       ├── review/page.tsx            # Split-screen Grading Review Workspace & audit trails
+│   │       └── markbook/page.tsx          # Deterministic Markbook matrix, scale converter & inline editor
 │   ├── results/page.tsx                   # Results & Markbook hub
 │   ├── classes/page.tsx                   # Classes & student roster management
-│   ├── reports/page.tsx                   # Official printable student report cards
+│   ├── reports/page.tsx                   # Official printable & downloadable student report cards
 │   ├── settings/page.tsx                  # Teacher profile, grade bands & AI status
 │   └── api/
+│       ├── assessments/                   # REST endpoints for assessment CRUD & drafts
 │       ├── grading/route.ts               # Server-side grading pipeline invocation
+│       ├── results/                       # Result approval, rejection, unreadable flag, reassignment
+│       ├── upload/route.ts                # Private multi-file upload endpoint (with 25MB validation)
+│       ├── files/[...path]/route.ts       # Secure private file streaming endpoint
+│       ├── reports/[studentId]/           # Report data & PDF generation endpoints
 │       ├── export-csv/route.ts            # RFC4180 deterministic CSV export
 │       └── seed/route.ts                  # Workspace demo data reset endpoint
 ├── components/
@@ -55,21 +60,26 @@ src/
 │   ├── tokens.ts                          # Centralized design tokens
 │   ├── utils.ts                           # Scoring and string formatting helpers
 │   ├── db/
-│   │   └── repo.ts                        # CRUD repository & resilient seed store
+│   │   ├── repo.ts                        # Client-side cache & seed store
+│   │   └── server-store.ts                # Server-side persistent store (.data/db.json) with audit trail
 │   ├── scoring/
 │   │   └── deterministic-calculator.ts    # Deterministic arithmetic, rounding & bounds
 │   ├── grading/
-│   │   ├── types.ts                       # GradingProvider interface
+│   │   ├── types.ts                       # GradingProvider interface & extraction models
+│   │   ├── fixtures.ts                    # Representative grading fixtures for all edge cases
 │   │   ├── mock-provider.ts               # Deterministic MockGradingProvider
-│   │   ├── nebius-provider.ts             # Nebius Token Factory NVIDIA LLM provider
+│   │   ├── nebius-provider.ts             # Nebius Token Factory NVIDIA LLM provider (isolated stub)
 │   │   └── engine.ts                      # GradingEngine orchestrator
 │   ├── storage/
-│   │   └── file-storage.ts                # Private storage validation & pipeline stages
+│   │   ├── validation.ts                  # Client-safe file & MIME validation helpers
+│   │   └── file-storage.ts                # Private storage (.data/storage/uploads) & streaming
+│   ├── reports/
+│   │   └── pdf-generator.ts               # Pure PDF generation for report cards
 │   └── supabase/
 │       ├── client.ts                      # Browser Supabase client
 │       └── server.ts                      # Server-side Supabase SSR client
 ├── scripts/
-│   └── verify-all.ts                      # Automated verification test suite (39 assertions)
+│   └── verify-all.ts                      # Automated verification test suite (66 assertions)
 └── supabase/
     └── migrations/
         └── 20261013000000_initial_schema.sql # PostgreSQL schema with RLS & constraints
@@ -82,23 +92,26 @@ src/
 ### Fully Functional
 1. **Interactive Navigation Shell**: Persistent sidebar, mobile drawer, quick "+ New Assessment" CTA, and real-time AI provider status badge.
 2. **Dashboard**: Live metrics, recent assessment queues, active cohort counters, and empty state fallbacks.
-3. **Assessment Creation Flow**: 4-step wizard:
-   - Metadata (name, subject, grade, section, max marks, date)
-   - Question paper / rubric upload + interactive per-question criteria builder
-   - Student roster assignment and script upload with MIME type / 25MB validation
-   - Verification summary and processing architecture review
-4. **Grading Review Workspace**:
-   - Split-screen workspace with original student script page preview and detected answer crops.
+3. **Assessment Creation & Draft Flow**:
+   - Save drafts at any stage and reopen without losing data (`/assessments/new?draftId=...`).
+   - Metadata (name, subject, grade, section, max marks, date).
+   - Question paper and marking scheme upload with real multipart file persistence in `.data/storage/uploads/`.
+   - Per-question rubric builder with criteria breakdown.
+   - Student roster assignment and script upload with MIME type / 25MB validation.
+4. **Grading Review Workspace & Full Auditability**:
+   - Split-screen workspace with original student script preview and detected answer crops.
    - Question-by-question rubric criteria checklist.
    - AI proposed score vs. teacher approved score distinction.
-   - Handwriting legibility uncertainty flags (`high_confidence`, `medium_confidence`, `high_uncertainty`).
-   - Teacher mark edits and feedback comments.
+   - Full audit history logging on every modification (storing timestamp, teacher name, previous score, new score, and reason).
+   - Answer reassignment to correct misattributed question matches.
+   - Flag unreadable handwriting without silently penalizing students.
    - Individual question approval and "Approve Entire Script" batch action.
 5. **Deterministic Markbook**:
    - Question columns x student rows matrix.
    - Instant score recalculation upon cell editing.
    - Strict score boundary enforcement (`0 <= score <= max_marks`).
    - Configurable rounding modes (`half_up`, `floor`, `ceil`).
+   - Configurable raw-to-scale conversion (Raw, /50, /100, custom scale).
    - Missing questions explicitly flagged rather than coerced to zero.
    - One-click RFC4180 CSV export endpoint (`/api/export-csv`).
 6. **Classes & Students Management**:
@@ -109,15 +122,17 @@ src/
    - Student selector with subject-wise score breakdowns.
    - Clear distinction between raw marks and converted percentages.
    - Configurable grade bands (A*, A, B, C, D, E, F).
+   - Downloadable official PDF generation (`/api/reports/[studentId]/pdf`).
    - Clean printable layout with institutional headers, registrar signatures, and `@media print` styling.
-8. **Settings**:
+8. **Private Storage & Dual Persistence**:
+   - Private storage layer in `.data/storage/uploads/` with subfolders for papers, schemes, and scripts.
+   - Secure private streaming endpoint at `/api/files/[...path]`.
+   - Server-side persistent database store (`.data/db.json`) preserving assessments, scripts, questions, audit records, and markbook states across server restarts.
+   - PostgreSQL schema with Row-Level Security in `supabase/migrations/20261013000000_initial_schema.sql`.
+9. **Settings**:
    - Teacher profile, school name, department, default marks.
    - Interactive grade bands threshold editor.
    - AI provider status card with key entry and model selection.
-9. **Database Schema & RLS**:
-   - Production SQL migration in `supabase/migrations/20261013000000_initial_schema.sql`.
-   - Complete tables for profiles, classes, students, assessments, questions, scripts, grading results, and approvals.
-   - Strict Row-Level Security ensuring teachers can only access their own records.
 
 ### Simulated
 1. **MockGradingProvider**:
@@ -132,18 +147,15 @@ src/
 Create a `.env.local` file in the project root:
 
 ```env
-# Supabase Configuration (Optional for local testing; repo includes resilient fallback)
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+# Supabase Configuration
+NEXT_PUBLIC_SUPABASE_URL=https://rwbpxwxnxjfzhajqteje.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_wDCLZVgj5tLvvn2Y57eFCg_k79O9I-_
 
-# Nebius Token Factory (NVIDIA Open-Source Model Integration)
+# Nebius Token Factory (NVIDIA Open-Source Model Integration - Awaiting Team Review)
 NEBIUS_API_KEY=
 NEBIUS_BASE_URL=https://api.tokenfactory.nebius.ai/v1
 NEBIUS_MODEL_NAME=nvidia/llama-3.1-nemotron-70b-instruct
 ```
-
-> **Note**: If `NEXT_PUBLIC_SUPABASE_URL` is omitted, the application runs in local development mode with seed cohorts and persistent state.
 
 ---
 
@@ -158,7 +170,7 @@ npm install
 ```bash
 npm test
 ```
-Runs the 39-point deterministic verification suite testing score boundaries, rounding, grade bands, mock provider outputs, Nebius error handling, and markbook calculations.
+Runs the **66-point deterministic verification suite** testing score boundaries, rounding, grade bands, mock provider outputs, Nebius error handling, file storage, MIME validation, draft lifecycle, audit trail logging, question reassignment, unreadable handwriting flagging, raw-to-scale conversion, and PDF generation.
 
 ### 3. Run Development Server
 ```bash

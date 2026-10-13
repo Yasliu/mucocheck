@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { gradingEngine } from "@/lib/grading/engine";
-import { repository } from "@/lib/db/repo";
+import { serverStore } from "@/lib/db/server-store";
 
 export async function POST(req: Request) {
   try {
@@ -14,12 +14,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const script = repository.getScript(scriptId);
+    const script = serverStore.getScript(scriptId);
     if (!script) {
       return NextResponse.json({ error: "Script not found." }, { status: 404 });
     }
 
-    const questions = repository.getQuestions(assessmentId);
+    const questions = serverStore.getQuestions(assessmentId);
     if (questions.length === 0) {
       return NextResponse.json(
         { error: "No assessment questions configured." },
@@ -34,7 +34,7 @@ export async function POST(req: Request) {
       maxMarks: q.max_marks,
       rubricCriteria: q.rubric_criteria,
       modelAnswer: q.model_answer,
-      studentAnswerText: `Extracted handwriting candidate text for Question ${q.question_number}`,
+      studentAnswerText: `Candidate handwriting response extracted for Question ${q.question_number}`,
       scriptImageReference: script.file_path,
       scriptPageIndex: q.question_number,
       extractionConfidence: 0.92,
@@ -54,18 +54,31 @@ export async function POST(req: Request) {
       preferredMode || "mock"
     );
 
-    // Save outputs to repository
+    // Save outputs to serverStore
     for (const res of result.results) {
-      const existing = repository
+      const existing = serverStore
         .getGradingResults(assessmentId, scriptId)
         .find((r) => r.question_id === res.questionId);
 
       if (existing) {
-        repository.updateGradingResult(existing.id, {
-          approved_score: null, // AI proposals remain unapproved until teacher approves
+        serverStore.updateGradingResult(existing.id, {
+          approved_score: null, // Preserved separately from proposed
           status: res.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
           feedback: res.conciseRationale,
           edited_by_teacher: false,
+          is_unreadable: res.isUnreadable,
+          is_unmatched: res.isUnmatched,
+        });
+      } else {
+        // Create new result record
+        const newResultId = `gr-${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        serverStore.updateGradingResult(newResultId, {
+          approved_score: null,
+          status: res.uncertaintyStatus === "high_uncertainty" ? "needs_review" : "proposed",
+          feedback: res.conciseRationale,
+          edited_by_teacher: false,
+          is_unreadable: res.isUnreadable,
+          is_unmatched: res.isUnmatched,
         });
       }
     }

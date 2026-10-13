@@ -46,15 +46,42 @@ export default function AssessmentMarkbookPage({
   });
 
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [targetScale, setTargetScale] = useState<string>("raw");
+  const [customScaleValue, setCustomScaleValue] = useState<string>("100");
   const [editingCell, setEditingCell] = useState<{
     studentId: string;
     questionId: string;
   } | null>(null);
   const [tempCellValue, setTempCellValue] = useState<string>("");
 
-  const loadData = () => {
+  const effectiveScale = targetScale === "raw" ? undefined : targetScale === "custom" ? Number(customScaleValue) || undefined : Number(targetScale);
+
+  const loadData = async () => {
     try {
-      const data = repository.getMarkbook(assessmentId);
+      const url = `/api/assessments/${assessmentId}/markbook${effectiveScale ? `?targetScaleMax=${effectiveScale}` : ""}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.assessment) {
+          setAssessment(data.assessment);
+          setQuestions(data.questions || []);
+          setRows(data.rows || []);
+          setStats(data.stats || {
+            averageScore: null,
+            highestScore: null,
+            lowestScore: null,
+            approvedCount: 0,
+            pendingCount: 0,
+          });
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Could not fetch markbook from API, falling back to local store", e);
+    }
+
+    try {
+      const data = repository.getMarkbook(assessmentId, effectiveScale);
       setAssessment(data.assessment);
       setQuestions(data.questions);
       setRows(data.rows);
@@ -66,9 +93,9 @@ export default function AssessmentMarkbookPage({
 
   useEffect(() => {
     loadData();
-  }, [assessmentId]);
+  }, [assessmentId, targetScale, customScaleValue]);
 
-  const handleCellBlur = (
+  const handleCellBlur = async (
     resultId: string | undefined,
     questionId: string,
     studentId: string
@@ -86,6 +113,19 @@ export default function AssessmentMarkbookPage({
     }
 
     if (resultId) {
+      try {
+        await fetch(`/api/results/${resultId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            approved_score: val,
+            status: "approved",
+            teacher_reason: "Markbook table direct edit",
+          }),
+        });
+      } catch (err) {
+        console.warn("API save failed, using local repo", err);
+      }
       repository.updateGradingResult(resultId, {
         approved_score: val,
         status: "approved",
@@ -126,7 +166,7 @@ export default function AssessmentMarkbookPage({
             </h2>
           </div>
           <p className="text-xs text-[#6E685F]">
-            Deterministic question matrix with instant score recalculation and CSV export.
+            Deterministic question matrix with instant score recalculation, configurable scale conversion and CSV export.
           </p>
         </div>
 
@@ -188,21 +228,48 @@ export default function AssessmentMarkbookPage({
         </div>
       </div>
 
-      {/* Filter Bar */}
-      <div className="flex items-center justify-between bg-[#FFFFFF] p-3 rounded border border-[#E8E2D5] text-xs">
-        <div className="flex items-center gap-2">
-          <Filter className="w-3.5 h-3.5 text-[#8E877D]" />
-          <span className="text-[#6E685F]">Filter by Approval Status:</span>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
-            className="bg-[#FAF8F3] border border-[#E8E2D5] rounded py-1 px-2 text-[#1C1A17]"
-          >
-            <option value="all">All Candidates ({rows.length})</option>
-            <option value="approved">Approved Only</option>
-            <option value="needs_review">Needs Review Only</option>
-            <option value="proposed">AI Proposed Only</option>
-          </select>
+      {/* Control Bar: Filter & Conversion */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-[#FFFFFF] p-3 rounded border border-[#E8E2D5] text-xs">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Filter className="w-3.5 h-3.5 text-[#8E877D]" />
+            <span className="text-[#6E685F]">Approval Status:</span>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="bg-[#FAF8F3] border border-[#E8E2D5] rounded py-1 px-2 text-[#1C1A17]"
+            >
+              <option value="all">All Candidates ({rows.length})</option>
+              <option value="approved">Approved Only</option>
+              <option value="needs_review">Needs Review Only</option>
+              <option value="proposed">AI Proposed Only</option>
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 border-l border-[#E8E2D5] pl-4">
+            <span className="text-[#6E685F]">Scale Conversion:</span>
+            <select
+              value={targetScale}
+              onChange={(e) => setTargetScale(e.target.value)}
+              className="bg-[#FAF8F3] border border-[#E8E2D5] rounded py-1 px-2 text-[#1C1A17]"
+            >
+              <option value="raw">Raw (Max {assessment.max_marks})</option>
+              <option value="50">Convert to /50</option>
+              <option value="100">Convert to /100</option>
+              <option value="custom">Custom scale...</option>
+            </select>
+            {targetScale === "custom" && (
+              <input
+                type="number"
+                min="1"
+                max="1000"
+                value={customScaleValue}
+                onChange={(e) => setCustomScaleValue(e.target.value)}
+                className="w-16 bg-[#FAF8F3] border border-[#E8E2D5] rounded py-1 px-2 text-[#1C1A17] font-mono text-xs"
+                placeholder="Scale"
+              />
+            )}
+          </div>
         </div>
 
         <span className="text-[11px] text-[#6E685F]">
@@ -231,6 +298,14 @@ export default function AssessmentMarkbookPage({
                   (/{assessment.max_marks})
                 </div>
               </th>
+              {effectiveScale && (
+                <th className="py-3 px-3 text-center font-bold text-[#2A5A43] min-w-[90px] bg-[#EFF5F1]/50">
+                  Scaled Total
+                  <div className="text-[10px] font-mono text-[#2A5A43]">
+                    (/{effectiveScale})
+                  </div>
+                </th>
+              )}
               <th className="py-3 px-3 text-center font-bold text-[#1C1A17] min-w-[80px]">
                 %
               </th>
@@ -319,6 +394,12 @@ export default function AssessmentMarkbookPage({
                 <td className="py-2.5 px-3 text-center font-mono font-bold text-[#1C1A17]">
                   {formatScore(r.raw_total)}
                 </td>
+
+                {effectiveScale && (
+                  <td className="py-2.5 px-3 text-center font-mono font-bold text-[#2A5A43] bg-[#EFF5F1]/30">
+                    {r.converted_total !== undefined ? formatScore(r.converted_total) : "—"}
+                  </td>
+                )}
 
                 <td className="py-2.5 px-3 text-center font-mono font-medium text-[#2A5A43]">
                   {formatPercentage(r.percentage)}
