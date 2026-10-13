@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Mucono Restrained Educational Palette */
+    --background: #FBF9F5;
+    --foreground: #1C1A17;
+
+    --surface: #FFFFFF;
+    --surface-subtle: #F6F3EB;
+    --surface-hover: #F0EBE0;
+
+    --muted: #6E685F;
+    --muted-foreground: #7D766C;
+
+    --border: #E8E2D5;
+    --border-subtle: #F0EBE0;
+    --border-strong: #D2CAB9;
+
+    /* Botanical Green Primary Accent */
+    --primary: #2A5A43;
+    --primary-foreground: #FBF9F5;
+    --primary-hover: #214734;
+    --primary-subtle: #EFF5F1;
+    --primary-border: #BCD4C7;
+
+    /* Terracotta Secondary Accent */
+    --secondary: #C25B3E;
+    --secondary-foreground: #FFFFFF;
+    --secondary-hover: #A64B31;
+    --secondary-subtle: #FDF3F0;
+    --secondary-border: #F1CDC3;
+
+    /* Status Badges */
+    --status-draft: #8A857D;
+    --status-draft-bg: #F4F2EE;
+    --status-proposed: #B2762A;
+    --status-proposed-bg: #FEF7EC;
+    --status-review: #C25B3E;
+    --status-review-bg: #FDF2EE;
+    --status-approved: #2A5A43;
+    --status-approved-bg: #EFF5F1;
+
+    /* Radius & Spacing */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+  }
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle editorial scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--surface-subtle);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Print styles for Report Cards & Markbook */
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .page-break {
+    page-break-after: always;
+  }
+}

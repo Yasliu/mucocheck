@@ -1,0 +1,544 @@
+"use client";
+
+import React, { use, useEffect, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  AlertTriangle,
+  Sparkles,
+  FileText,
+  User,
+  ZoomIn,
+  ZoomOut,
+  HelpCircle,
+  Save,
+  CheckCircle2,
+  Lock,
+} from "lucide-react";
+import { repository } from "@/lib/db/repo";
+import {
+  Assessment,
+  AssessmentQuestion,
+  GradingResult,
+  StudentScript,
+} from "@/lib/types";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { UncertaintyBadge } from "@/components/ui/UncertaintyBadge";
+import { validateScoreBounds } from "@/lib/scoring/deterministic-calculator";
+
+function ReviewWorkspaceContent({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const resolvedParams = use(params);
+  const assessmentId = resolvedParams.id;
+  const searchParams = useSearchParams();
+  const initialScriptId = searchParams.get("scriptId");
+
+  const [assessment, setAssessment] = useState<Assessment | null>(null);
+  const [questions, setQuestions] = useState<AssessmentQuestion[]>([]);
+  const [scripts, setScripts] = useState<StudentScript[]>([]);
+  const [currentScriptIndex, setCurrentScriptIndex] = useState<number>(0);
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>("");
+  const [results, setResults] = useState<GradingResult[]>([]);
+
+  // Editing state for current question
+  const [teacherScore, setTeacherScore] = useState<number | string>("");
+  const [teacherFeedback, setTeacherFeedback] = useState<string>("");
+  const [saveSuccessMsg, setSaveSuccessMsg] = useState<string>("");
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [zoomLevel, setZoomLevel] = useState<number>(100);
+
+  useEffect(() => {
+    const asm = repository.getAssessment(assessmentId);
+    if (!asm) return;
+    setAssessment(asm);
+
+    const qList = repository.getQuestions(assessmentId);
+    setQuestions(qList);
+    if (qList.length > 0) {
+      setSelectedQuestionId(qList[0].id);
+    }
+
+    const scrList = repository.getScripts(assessmentId);
+    setScripts(scrList);
+
+    if (initialScriptId) {
+      const idx = scrList.findIndex((s) => s.id === initialScriptId);
+      if (idx !== -1) setCurrentScriptIndex(idx);
+    }
+
+    const allResults = repository.getGradingResults(assessmentId);
+    setResults(allResults);
+  }, [assessmentId, initialScriptId]);
+
+  const currentScript = scripts[currentScriptIndex];
+  const currentQuestion = questions.find((q) => q.id === selectedQuestionId);
+  const currentResult = results.find(
+    (r) =>
+      r.script_id === currentScript?.id && r.question_id === selectedQuestionId
+  );
+
+  // Sync inputs when switching questions or students
+  useEffect(() => {
+    if (currentResult) {
+      setTeacherScore(
+        currentResult.approved_score !== null
+          ? currentResult.approved_score
+          : currentResult.proposed_score
+      );
+      setTeacherFeedback(currentResult.feedback || "");
+      setErrorMsg("");
+      setSaveSuccessMsg("");
+    }
+  }, [currentResult]);
+
+  const handleSaveAndApprove = (markAsApproved = true) => {
+    if (!currentResult || !currentQuestion) return;
+
+    const numScore = Number(teacherScore);
+    const validation = validateScoreBounds(numScore, currentQuestion.max_marks);
+    if (!validation.valid) {
+      setErrorMsg(validation.error || "Invalid score");
+      return;
+    }
+
+    try {
+      const updated = repository.updateGradingResult(currentResult.id, {
+        approved_score: numScore,
+        feedback: teacherFeedback,
+        status: markAsApproved ? "approved" : "needs_review",
+        edited_by_teacher: true,
+      });
+
+      // Update state
+      setResults((prev) =>
+        prev.map((r) => (r.id === updated.id ? updated : r))
+      );
+
+      // Refresh assessment and scripts in state
+      setAssessment(repository.getAssessment(assessmentId)!);
+      setScripts(repository.getScripts(assessmentId));
+
+      setSaveSuccessMsg(
+        markAsApproved ? "Score approved and recorded." : "Flagged for further review."
+      );
+      setTimeout(() => setSaveSuccessMsg(""), 3000);
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleApproveAllForScript = () => {
+    if (!currentScript) return;
+    repository.approveAllResultsForScript(currentScript.id);
+    setResults(repository.getGradingResults(assessmentId));
+    setAssessment(repository.getAssessment(assessmentId)!);
+    setScripts(repository.getScripts(assessmentId));
+    setSaveSuccessMsg("All questions for this script have been approved!");
+    setTimeout(() => setSaveSuccessMsg(""), 3000);
+  };
+
+  if (!assessment || scripts.length === 0) {
+    return (
+      <div className="py-20 text-center space-y-3 text-xs">
+        <p className="text-[#1C1A17] font-medium">No scripts available to review</p>
+        <Link
+          href={`/assessments/${assessmentId}`}
+          className="text-[#2A5A43] hover:underline"
+        >
+          &larr; Back to Assessment Details
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Top Review Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-[#E8E2D5]">
+        <div className="flex items-center gap-3">
+          <Link
+            href={`/assessments/${assessment.id}`}
+            className="p-1.5 rounded text-[#6E685F] hover:text-[#1C1A17] hover:bg-[#F6F3EB]"
+            title="Back to Assessment"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="font-serif text-lg font-semibold text-[#1C1A17]">
+                Grading Review Workspace
+              </h2>
+              <span className="text-[10px] px-2 py-0.5 rounded font-mono bg-[#FEF7EC] text-[#B2762A] border border-[#F3DEC0]">
+                MOCK PROVIDER
+              </span>
+            </div>
+            <p className="text-xs text-[#6E685F]">
+              {assessment.title} • {currentScript?.student_name} ({currentScript?.roll_number})
+            </p>
+          </div>
+        </div>
+
+        {/* Student Navigation Controls */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentScriptIndex((prev) => Math.max(0, prev - 1))}
+            disabled={currentScriptIndex === 0}
+            className="p-1.5 rounded border border-[#E8E2D5] bg-[#FFFFFF] hover:bg-[#FAF8F3] disabled:opacity-40 text-xs text-[#1C1A17]"
+            title="Previous Student"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-xs text-[#6E685F] px-1 font-mono">
+            Student {currentScriptIndex + 1} of {scripts.length}
+          </span>
+          <button
+            onClick={() =>
+              setCurrentScriptIndex((prev) =>
+                Math.min(scripts.length - 1, prev + 1)
+              )
+            }
+            disabled={currentScriptIndex === scripts.length - 1}
+            className="p-1.5 rounded border border-[#E8E2D5] bg-[#FFFFFF] hover:bg-[#FAF8F3] disabled:opacity-40 text-xs text-[#1C1A17]"
+            title="Next Student"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={handleApproveAllForScript}
+            className="ml-2 inline-flex items-center gap-1 px-3 py-1.5 rounded bg-[#EFF5F1] hover:bg-[#BCD4C7] text-[#2A5A43] border border-[#BCD4C7] text-xs font-medium transition-colors"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Approve Entire Script</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Split-Screen Workspace */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-[680px]">
+        {/* Left Side: Script Document & Handwriting Canvas Preview (7 cols) */}
+        <div className="lg:col-span-7 bg-[#FFFFFF] border border-[#E8E2D5] rounded-md flex flex-col shadow-2xs overflow-hidden">
+          {/* Viewer Toolbar */}
+          <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-[#2A5A43]" />
+              <span className="font-medium text-[#1C1A17]">
+                {currentScript?.file_name}
+              </span>
+              <span className="text-[#6E685F]">
+                (Page {currentQuestion?.question_number || 1} of {currentScript?.page_count || 1})
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setZoomLevel((z) => Math.max(75, z - 15))}
+                className="p-1 text-[#6E685F] hover:text-[#1C1A17] rounded"
+                title="Zoom out"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-[11px] font-mono text-[#6E685F]">
+                {zoomLevel}%
+              </span>
+              <button
+                onClick={() => setZoomLevel((z) => Math.min(150, z + 15))}
+                className="p-1 text-[#6E685F] hover:text-[#1C1A17] rounded"
+                title="Zoom in"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Script Document Simulated Surface */}
+          <div className="flex-1 p-6 bg-[#F6F3EB] overflow-auto flex items-center justify-center">
+            <div
+              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: "top center" }}
+              className="w-full max-w-lg bg-[#FFFDF9] border border-[#D8D2C4] shadow-md rounded p-8 font-serif transition-transform duration-150 space-y-6 text-[#1C1A17]"
+            >
+              {/* Header on Student Script Page */}
+              <div className="border-b-2 border-[#1C1A17] pb-3 flex justify-between items-baseline text-xs">
+                <div>
+                  <span className="font-bold uppercase tracking-wider text-[11px]">
+                    Candidate Script
+                  </span>
+                  <p className="font-sans text-sm font-semibold text-[#1C1A17]">
+                    {currentScript?.student_name}
+                  </p>
+                </div>
+                <div className="text-right font-sans">
+                  <span className="text-[#6E685F]">Roll No:</span>{" "}
+                  <strong className="font-mono">{currentScript?.roll_number}</strong>
+                </div>
+              </div>
+
+              {/* Simulated Handwritten Section */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-xs font-sans text-[#6E685F]">
+                  <span className="font-semibold text-[#1C1A17]">
+                    Question {currentQuestion?.question_number}.
+                  </span>
+                  <span>Max: {currentQuestion?.max_marks} marks</span>
+                </div>
+
+                {/* Simulated Script Content Box */}
+                <div className="p-4 rounded border-2 border-dashed border-[#2A5A43]/30 bg-[#FAF9F5] space-y-3 relative">
+                  <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded text-[10px] bg-[#EFF5F1] text-[#2A5A43] font-sans font-medium border border-[#BCD4C7]">
+                    Detected Answer Region
+                  </div>
+
+                  <p className="font-serif italic text-base leading-relaxed text-[#23211E]">
+                    {currentResult?.answer_extracted_text ||
+                      "The candidate answered: Cellular ATP Synthase utilizes the electrochemical proton gradient across the inner mitochondrial membrane..."}
+                  </p>
+
+                  {/* Handwriting condition callout if uncertainty flagged */}
+                  {currentResult?.uncertainty_status === "high_uncertainty" && (
+                    <div className="mt-3 p-2.5 rounded bg-[#FDF2EE] border border-[#F1CDC3] font-sans text-xs text-[#C25B3E] flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="font-semibold">
+                          Low legibility warning on step formula:
+                        </strong>
+                        <p className="text-[11px] mt-0.5">
+                          Subscript handwriting shows smudging or irregular strokes. Teacher verification required before approval.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Bottom footer on physical script page */}
+              <div className="pt-6 border-t border-[#E8E2D5] flex justify-between text-[11px] font-sans text-[#8E877D]">
+                <span>Examination Paper Ref: {assessment.question_paper_name}</span>
+                <span>Page {currentQuestion?.question_number || 1}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Side: Grading Result, Rubric & Teacher Approval (5 cols) */}
+        <div className="lg:col-span-5 bg-[#FFFFFF] border border-[#E8E2D5] rounded-md flex flex-col shadow-2xs overflow-hidden">
+          {/* Question Selector Tabs */}
+          <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
+            <span className="font-semibold text-[#1C1A17]">Question Rubric</span>
+            <div className="flex items-center gap-1">
+              {questions.map((q) => {
+                const res = results.find(
+                  (r) =>
+                    r.script_id === currentScript?.id && r.question_id === q.id
+                );
+                const isApproved = res?.status === "approved";
+                const isSelected = selectedQuestionId === q.id;
+
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => setSelectedQuestionId(q.id)}
+                    className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                      isSelected
+                        ? "bg-[#2A5A43] text-[#FBF9F5]"
+                        : isApproved
+                        ? "bg-[#EFF5F1] text-[#2A5A43] border border-[#BCD4C7]"
+                        : "bg-[#FFFFFF] text-[#6E685F] border border-[#E8E2D5] hover:bg-[#F6F3EB]"
+                    }`}
+                  >
+                    Q{q.question_number}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Question Body & Rationale */}
+          <div className="flex-1 p-5 space-y-5 overflow-y-auto text-xs">
+            {/* Question Prompt */}
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[#1C1A17]">
+                  Question {currentQuestion?.question_number}
+                </span>
+                <span className="font-mono text-xs font-medium text-[#2A5A43]">
+                  Max: {currentQuestion?.max_marks} marks
+                </span>
+              </div>
+              <p className="text-[#1C1A17] text-xs leading-relaxed">
+                {currentQuestion?.question_text}
+              </p>
+            </div>
+
+            {/* Rubric Criteria Checklist */}
+            <div className="space-y-2 pt-2 border-t border-[#E8E2D5]">
+              <span className="font-semibold text-[#1C1A17] block">
+                Criteria Checkpoints
+              </span>
+              <div className="space-y-1.5">
+                {currentQuestion?.rubric_criteria.map((c) => {
+                  const satisfied =
+                    currentResult?.criteria_satisfied?.includes(c.id) ||
+                    currentResult?.criteria_satisfied?.includes(c.criterion);
+
+                  return (
+                    <div
+                      key={c.id}
+                      className={`p-2 rounded border flex items-start justify-between gap-2 text-xs ${
+                        satisfied
+                          ? "bg-[#EFF5F1] border-[#BCD4C7] text-[#2A5A43]"
+                          : "bg-[#FAF8F3] border-[#E8E2D5] text-[#6E685F]"
+                      }`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <Check
+                          className={`w-3.5 h-3.5 mt-0.5 ${
+                            satisfied ? "text-[#2A5A43]" : "text-[#D2CAB9]"
+                          }`}
+                        />
+                        <span>{c.criterion}</span>
+                      </div>
+                      <span className="font-mono font-medium shrink-0">
+                        {c.marks}m
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Proposed Score & Uncertainty Indicator */}
+            <div className="p-3.5 rounded border border-[#E8E2D5] bg-[#FAF8F3] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] text-[#6E685F] block">
+                    AI Proposed Score
+                  </span>
+                  <div className="flex items-baseline gap-1.5 mt-0.5">
+                    <span className="text-2xl font-serif font-bold text-[#1C1A17]">
+                      {currentResult?.proposed_score ?? "—"}
+                    </span>
+                    <span className="text-xs text-[#6E685F]">
+                      / {currentQuestion?.max_marks}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-right space-y-1">
+                  <span className="text-[11px] text-[#6E685F] block">
+                    Extraction Status
+                  </span>
+                  {currentResult && (
+                    <UncertaintyBadge
+                      status={currentResult.uncertainty_status}
+                      confidenceScore={currentResult.confidence_score}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[11px] font-medium text-[#1C1A17] block mb-0.5">
+                  AI Evaluator Rationale:
+                </span>
+                <p className="text-xs text-[#6E685F] italic bg-[#FFFFFF] p-2.5 rounded border border-[#E8E2D5]">
+                  &ldquo;{currentResult?.rationale || "Rationale pending evaluation."}&rdquo;
+                </p>
+              </div>
+            </div>
+
+            {/* Teacher Decision & Score Adjustment */}
+            <div className="space-y-3 pt-3 border-t border-[#E8E2D5]">
+              <div className="flex items-center justify-between">
+                <label className="font-semibold text-[#1C1A17] text-xs">
+                  Teacher Approved Score *
+                </label>
+                <StatusBadge status={currentResult?.status || "draft"} />
+              </div>
+
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  max={currentQuestion?.max_marks || 10}
+                  value={teacherScore}
+                  onChange={(e) => setTeacherScore(e.target.value)}
+                  className="w-24 p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-base font-bold font-mono text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
+                />
+                <span className="text-xs text-[#6E685F]">
+                  out of {currentQuestion?.max_marks} marks
+                </span>
+              </div>
+
+              <div>
+                <label className="font-medium text-[#1C1A17] text-xs block mb-1">
+                  Teacher Feedback & Comments:
+                </label>
+                <textarea
+                  rows={2}
+                  value={teacherFeedback}
+                  onChange={(e) => setTeacherFeedback(e.target.value)}
+                  placeholder="Add feedback visible to student and on report cards..."
+                  className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-xs text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
+                />
+              </div>
+
+              {errorMsg && (
+                <div className="p-2 rounded bg-[#FDF2EE] border border-[#F1CDC3] text-xs text-[#C25B3E]">
+                  {errorMsg}
+                </div>
+              )}
+
+              {saveSuccessMsg && (
+                <div className="p-2 rounded bg-[#EFF5F1] border border-[#BCD4C7] text-xs text-[#2A5A43]">
+                  {saveSuccessMsg}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Footer Action Bar */}
+          <div className="p-4 bg-[#FAF8F3] border-t border-[#E8E2D5] flex items-center justify-between gap-3 text-xs">
+            <button
+              onClick={() => handleSaveAndApprove(false)}
+              className="px-3 py-2 rounded border border-[#E8E2D5] bg-[#FFFFFF] hover:bg-[#FDF2EE] text-[#C25B3E] font-medium transition-colors"
+            >
+              Flag for Review
+            </button>
+
+            <button
+              onClick={() => handleSaveAndApprove(true)}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded bg-[#2A5A43] hover:bg-[#214734] text-[#FBF9F5] font-medium transition-colors shadow-xs"
+            >
+              <Check className="w-4 h-4" />
+              <span>Approve Mark</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function GradingReviewPage(props: {
+  params: Promise<{ id: string }>;
+}) {
+  return (
+    <React.Suspense
+      fallback={
+        <div className="py-20 text-center text-xs text-[#6E685F]">
+          Loading grading review workspace...
+        </div>
+      }
+    >
+      <ReviewWorkspaceContent {...props} />
+    </React.Suspense>
+  );
+}
