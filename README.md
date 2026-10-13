@@ -1,193 +1,310 @@
 # MucoCheck — AI Grading Workspace
 
-A standalone educational productivity web application for teachers designed to grade handwritten examination scripts using question rubrics, deterministic mark aggregation, and teacher verification.
+A standalone, privacy-focused educational productivity web application for teachers designed to manage examination grading, inspect handwritten student scripts, apply rubric-based scoring, and maintain auditable gradebooks.
 
-Built with **Next.js 16**, **TypeScript**, **Tailwind CSS**, and **Supabase PostgreSQL**. Prepared for **NVIDIA open-source models** via **Nebius Token Factory**.
-
----
-
-## 1. Visual Design Philosophy
-
-MucoCheck follows the restrained educational productivity philosophy of Mucono:
-
-- **Warm Canvas Palette**: Paper ivory (`#FBF9F5`) and warm surfaces (`#FFFFFF` / `#FAF8F3`).
-- **Deep Ink Typography**: High-contrast, readable slate ink typography (`#1C1A17`).
-- **Muted Botanical Green Primary**: Botanical sage/forest accent (`#2A5A43`).
-- **Restrained Terracotta Secondary**: Subtle terracotta accents (`#C25B3E`) for review alerts and notices.
-- **Subtle Borders & Minimal Shadows**: Hairline borders (`#E8E2D5`) without distracting glowing gradients or heavy floating cards.
-- **Editorial Hierarchy**: Clean tabular markbooks, split-screen review workspaces, and printable official report cards.
+Built with **Next.js 16 (App Router)**, **TypeScript**, **Tailwind CSS**, and **Supabase PostgreSQL & Auth**. Prepared for **NVIDIA open-source models** via **Nebius Token Factory**.
 
 ---
 
-## 2. System Architecture
+## 1. Project Overview & Current Status
 
-The application enforces a clear separation of concerns:
+MucoCheck streamlines the examination assessment workflow for teachers. It addresses the end-to-end grading journey:
+- Setting up structured assessments with multi-part question rubrics and criteria.
+- Enrolling student cohorts and managing answer script attachments.
+- Reviewing provisional grading evaluations side-by-side with original student scripts.
+- Overriding marks with mandatory rationale logging in an immutable audit trail.
+- Aggregating deterministic markbooks with boundary checks, configurable rounding, and grade bands.
+- Printing official institutional report cards and exporting RFC4180 CSV markbooks.
+
+### Current Status
+- **Application Workspaces & Review UI**: Fully functional and operational.
+- **Persistence & Security Layer**: Real Supabase PostgreSQL database store and private Storage bucket integration with server-side authorization and strict production fail-closed semantics.
+- **AI Inference Integration**: Prepared with a strict provider abstraction (`GradingProvider`). Currently running in deterministic simulation mode (`MockGradingProvider`) while the team's Nebius Token Factory account review is pending.
+
+---
+
+## 2. Feature Matrix: Implemented vs. Simulated vs. Planned
+
+| Feature Area | Status | Implementation Details |
+| :--- | :--- | :--- |
+| **Teacher Navigation Shell** | **Functional** | Persistent layout, mobile drawer, responsive header, and live AI mode indicator. |
+| **Dashboard & KPI Queue** | **Functional** | Real-time counters for pending scripts, active assessments, approval rates, and quick action shortcuts. |
+| **Assessment Setup Wizard** | **Functional** | 4-step guided creation (Metadata, Question Paper & Scheme, Rubric Builder, Student Script Roster). Supports drafts with auto-recovery. |
+| **Split-Screen Review Workspace** | **Functional** | Side-by-side view with script preview, per-question criteria evaluation, teacher override controls, and audit history. |
+| **Audit Trail & Overrides** | **Functional** | Every manual adjustment records teacher ID, timestamp, prior score, new score, and required reason note. |
+| **Deterministic Markbook** | **Functional** | Matrix grid (students × questions), cell-level score validation (`0 <= score <= max`), custom rounding (`half_up`, `floor`, `ceil`), raw-to-scale mapping, and RFC4180 CSV export. |
+| **Classes & Student Rosters** | **Functional** | Class creation, student enrollment, cohort switching, and individual test history inspection. |
+| **Report Cards & PDF Export** | **Functional** | Official printable report cards with grade bands (`A*` to `F`), subject summaries, and pure client/server PDF generation (`/api/reports/[studentId]/pdf`). |
+| **Supabase PostgreSQL Persistence** | **Functional** | Relational mapping across 8 tables with foreign keys and UUID normalization. Fails closed in production with explicit error handling. |
+| **Authentication & Authorization** | **Functional** | Production-enforced Supabase session validation (`401 Unauthorized` on missing auth; `403 Forbidden` on cross-teacher access). Isolated dev-mode fallback. |
+| **Private File Storage** | **Functional** | Private Supabase Storage buckets (`scripts`, `reference_docs`) with folder-level isolation (`auth.uid()`) and authenticated buffer streaming. |
+| **AI Grading Engine** | **Simulated** | `MockGradingProvider` returns deterministic rubric evaluations, handwriting flags, and rationales labeled `[MOCK PROVIDER]`. |
+| **Nebius Vision / OCR Pipeline** | **Planned** | Clean `NebiusGradingProvider` client stub ready for NVIDIA Nemotron vision/LLM endpoint integration once API access is granted. |
+
+---
+
+## 3. Architecture
+
+MucoCheck adheres to strict separation of concerns, zero trust on caller-supplied identity headers, and fail-closed production semantics:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Client Layer (UI)                      │
+│   Dashboard • Wizard • Split-Screen Review • Markbook Grid  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ Fetch / Bearer JWT / Cookie
+┌──────────────────────────────▼──────────────────────────────┐
+│                    Next.js API Route Layer                  │
+│  src/app/api/assessments • /api/results • /api/grading ...  │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ Server Auth Guard (src/lib/auth/server-auth.ts)       │  │
+│  │  - Enforces authenticated teacher session             │  │
+│  │  - Rejects untrusted headers in production (401)      │  │
+│  │  - Validates resource ownership (403)                 │  │
+│  └───────────────────────────────────────────────────────┘  │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+┌──────────────▼─────────────┐ ┌──────────────▼───────────────┐
+│     Data Access Layer      │ │      Storage Layer           │
+│  src/lib/db/supabase-store │ │  src/lib/storage/file-storage│
+│  - Supabase PostgreSQL     │ │  - Supabase Private Buckets  │
+│  - Row-Level Security      │ │  - Authenticated streaming   │
+│  - Fails closed in prod    │ │  - No public script URLs     │
+└──────────────┬─────────────┘ └──────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────┐
+│                  Grading Abstraction Layer                  │
+│                src/lib/grading/engine.ts                    │
+│                                                             │
+│   ┌───────────────────────────┐ ┌─────────────────────────┐ │
+│   │    MockGradingProvider    │ │   NebiusGradingProvider │ │
+│   │  (Active Simulation Mode) │ │  (Awaiting API Access)  │ │
+│   └───────────────────────────┘ └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Core Architectural Invariants
+1. **Zero Caller Trust**: Custom identity headers (`x-teacher-id`) are ignored in production. Teacher identity is derived exclusively from cryptographic Supabase Auth sessions (`auth.uid()`).
+2. **Fail-Closed Production**: In `NODE_ENV === "production"`, unauthenticated requests fail with `401 Unauthorized`, and backend outages throw `500 DatabaseServiceError`. There is zero silent fallback to local JSON or disk storage.
+3. **Private File Isolation**: Student examination scripts and marking schemes are saved in private Supabase Storage buckets. File downloads route through `/api/files/[...path]` with server-side ownership verification.
+4. **Provisional vs. Approved Scores**: AI-generated marks remain provisional proposals until a teacher verifies, optionally adjusts, and explicitly approves them.
+
+---
+
+## 4. Project Structure
 
 ```
 src/
 ├── app/
-│   ├── page.tsx                           # Overview dashboard & KPI queue
-│   ├── layout.tsx                         # Root layout with Suspense & Shell
-│   ├── globals.css                        # Design tokens, variables & print styles
+│   ├── page.tsx                           # Teacher overview dashboard & queues
+│   ├── layout.tsx                         # Root layout with global shell & styling
+│   ├── globals.css                        # Design tokens, variables & print stylesheets
 │   ├── assessments/
-│   │   ├── page.tsx                       # Assessments list & filters
+│   │   ├── page.tsx                       # Filterable assessment registry
 │   │   ├── new/page.tsx                   # Guided 4-step creation wizard & draft recovery
 │   │   └── [id]/
-│   │       ├── page.tsx                   # Assessment detail & file management
-│   │       ├── review/page.tsx            # Split-screen Grading Review Workspace & audit trails
-│   │       └── markbook/page.tsx          # Deterministic Markbook matrix, scale converter & inline editor
-│   ├── results/page.tsx                   # Results & Markbook hub
-│   ├── classes/page.tsx                   # Classes & student roster management
-│   ├── reports/page.tsx                   # Official printable & downloadable student report cards
-│   ├── settings/page.tsx                  # Teacher profile, grade bands & AI status
+│   │       ├── page.tsx                   # Assessment overview & script attachment manager
+│   │       ├── review/page.tsx            # Split-screen Grading Review Workspace
+│   │       └── markbook/page.tsx          # Deterministic Markbook matrix & CSV export
+│   ├── results/page.tsx                   # Global results hub
+│   ├── classes/page.tsx                   # Class rosters & student management
+│   ├── reports/page.tsx                   # Official printable student report cards
+│   ├── settings/page.tsx                  # Profile settings, grade bands & AI status
 │   └── api/
-│       ├── assessments/                   # REST endpoints for assessment CRUD & drafts
-│       ├── grading/route.ts               # Server-side grading pipeline invocation
-│       ├── results/                       # Result approval, rejection, unreadable flag, reassignment
-│       ├── upload/route.ts                # Private multi-file upload endpoint (with 25MB validation)
+│       ├── assessments/                   # Assessment CRUD, drafts, scripts & markbooks
+│       ├── grading/route.ts               # Server-side grading pipeline orchestrator
+│       ├── results/                       # Result approval, rejection, flags & reassignment
+│       ├── upload/route.ts                # Private multi-file upload with MIME & size checks
 │       ├── files/[...path]/route.ts       # Secure private file streaming endpoint
-│       ├── reports/[studentId]/           # Report data & PDF generation endpoints
+│       ├── reports/[studentId]/           # Student report card data & PDF generation
 │       ├── export-csv/route.ts            # RFC4180 deterministic CSV export
-│       └── seed/route.ts                  # Workspace demo data reset endpoint
+│       └── seed/route.ts                  # Development data seeding (disabled in production)
 ├── components/
-│   ├── layout/
-│   │   └── Shell.tsx                      # Persistent navigation shell & AI status
-│   └── ui/
-│       ├── StatusBadge.tsx                # Status indicator (Draft, Proposed, Needs Review, Approved)
-│       └── UncertaintyBadge.tsx           # Extraction confidence & handwriting uncertainty
+│   ├── layout/Shell.tsx                   # Persistent navigation shell & AI status badge
+│   └── ui/                                # Badges, modals, cards, and input controls
 ├── lib/
-│   ├── types.ts                           # Core domain models & contracts
-│   ├── tokens.ts                          # Centralized design tokens
-│   ├── utils.ts                           # Scoring and string formatting helpers
+│   ├── types.ts                           # Core domain models, enums & interfaces
+│   ├── tokens.ts                          # Design tokens (colors, typography, spacing)
+│   ├── auth/server-auth.ts                # Server-side authorization & production security guards
 │   ├── db/
-│   │   ├── repo.ts                        # Client-side cache & seed store
-│   │   └── server-store.ts                # Server-side persistent store (.data/db.json) with audit trail
-│   ├── scoring/
-│   │   └── deterministic-calculator.ts    # Deterministic arithmetic, rounding & bounds
+│   │   ├── get-store.ts                   # Store resolver (SupabaseStore in prod, safe dev fallback)
+│   │   ├── supabase-store.ts              # PostgreSQL database repository adapter
+│   │   └── server-store.ts                # Development local file store (.data/db.json)
+│   ├── storage/file-storage.ts            # Private Supabase Storage manager & stream resolver
+│   ├── scoring/deterministic-calculator.ts# Boundary enforcement, rounding modes & scale mapping
 │   ├── grading/
-│   │   ├── types.ts                       # GradingProvider interface & extraction models
-│   │   ├── fixtures.ts                    # Representative grading fixtures for all edge cases
+│   │   ├── types.ts                       # GradingProvider interface & evaluation schemas
+│   │   ├── fixtures.ts                    # Edge-case evaluation fixtures (boundary, unreadable, etc.)
 │   │   ├── mock-provider.ts               # Deterministic MockGradingProvider
-│   │   ├── nebius-provider.ts             # Nebius Token Factory NVIDIA LLM provider (isolated stub)
-│   │   └── engine.ts                      # GradingEngine orchestrator
-│   ├── storage/
-│   │   ├── validation.ts                  # Client-safe file & MIME validation helpers
-│   │   └── file-storage.ts                # Private storage (.data/storage/uploads) & streaming
-│   ├── reports/
-│   │   └── pdf-generator.ts               # Pure PDF generation for report cards
-│   └── supabase/
-│       ├── client.ts                      # Browser Supabase client
-│       └── server.ts                      # Server-side Supabase SSR client
-├── scripts/
-│   └── verify-all.ts                      # Automated verification test suite (66 assertions)
-└── supabase/
-    └── migrations/
-        └── 20261013000000_initial_schema.sql # PostgreSQL schema with RLS & constraints
+│   │   ├── nebius-provider.ts             # Nebius Token Factory integration boundary
+│   │   └── engine.ts                      # GradingEngine pipeline orchestrator
+│   └── reports/pdf-generator.ts           # Pure PDF generation for report cards
+scripts/
+├── verify-all.ts                          # Automated 93-assertion verification suite
+├── test-supabase.ts                       # Supabase connectivity diagnostics
+└── migrate-to-supabase.ts                 # Local data migration & backup utility
+supabase/
+└── migrations/
+    ├── 20261013000000_initial_schema.sql  # Core schema, tables, foreign keys & RLS policies
+    └── 20261013000001_storage_buckets.sql # Private storage buckets & folder-level RLS policies
 ```
 
 ---
 
-## 3. What is Functional vs. What is Simulated
+## 5. Local Setup
 
-### Fully Functional
-1. **Interactive Navigation Shell**: Persistent sidebar, mobile drawer, quick "+ New Assessment" CTA, and real-time AI provider status badge.
-2. **Dashboard**: Live metrics, recent assessment queues, active cohort counters, and empty state fallbacks.
-3. **Assessment Creation & Draft Flow**:
-   - Save drafts at any stage and reopen without losing data (`/assessments/new?draftId=...`).
-   - Metadata (name, subject, grade, section, max marks, date).
-   - Question paper and marking scheme upload with real multipart file persistence in `.data/storage/uploads/`.
-   - Per-question rubric builder with criteria breakdown.
-   - Student roster assignment and script upload with MIME type / 25MB validation.
-4. **Grading Review Workspace & Full Auditability**:
-   - Split-screen workspace with original student script preview and detected answer crops.
-   - Question-by-question rubric criteria checklist.
-   - AI proposed score vs. teacher approved score distinction.
-   - Full audit history logging on every modification (storing timestamp, teacher name, previous score, new score, and reason).
-   - Answer reassignment to correct misattributed question matches.
-   - Flag unreadable handwriting without silently penalizing students.
-   - Individual question approval and "Approve Entire Script" batch action.
-5. **Deterministic Markbook**:
-   - Question columns x student rows matrix.
-   - Instant score recalculation upon cell editing.
-   - Strict score boundary enforcement (`0 <= score <= max_marks`).
-   - Configurable rounding modes (`half_up`, `floor`, `ceil`).
-   - Configurable raw-to-scale conversion (Raw, /50, /100, custom scale).
-   - Missing questions explicitly flagged rather than coerced to zero.
-   - One-click RFC4180 CSV export endpoint (`/api/export-csv`).
-6. **Classes & Students Management**:
-   - Cohort switcher, class creation and editing.
-   - Student enrollment and roster table.
-   - Student assessment history modal showing all previous tests and scores.
-7. **Official Report Cards**:
-   - Student selector with subject-wise score breakdowns.
-   - Clear distinction between raw marks and converted percentages.
-   - Configurable grade bands (A*, A, B, C, D, E, F).
-   - Downloadable official PDF generation (`/api/reports/[studentId]/pdf`).
-   - Clean printable layout with institutional headers, registrar signatures, and `@media print` styling.
-8. **Private Storage & Dual Persistence**:
-   - Private storage layer in `.data/storage/uploads/` with subfolders for papers, schemes, and scripts.
-   - Secure private streaming endpoint at `/api/files/[...path]`.
-   - Server-side persistent database store (`.data/db.json`) preserving assessments, scripts, questions, audit records, and markbook states across server restarts.
-   - PostgreSQL schema with Row-Level Security in `supabase/migrations/20261013000000_initial_schema.sql`.
-9. **Settings**:
-   - Teacher profile, school name, department, default marks.
-   - Interactive grade bands threshold editor.
-   - AI provider status card with key entry and model selection.
+### Prerequisites
+- **Node.js**: v18.17.0 or higher (Node 20+ recommended)
+- **npm** or **pnpm**
+- A **Supabase project** (Free or Pro tier)
 
-### Simulated
-1. **MockGradingProvider**:
-   - The Nebius account is currently awaiting team review. Development is non-blocked.
-   - The application uses `MockGradingProvider` returning deterministic, structured sample evaluations with criteria satisfied, rationales, and handwriting ambiguity flags.
-   - **No Live Model Fabrication**: The application never fabricates successful live API calls when unconfigured. Results generated in mock mode are transparently badged with `[MOCK PROVIDER]` and `MOCK ACTIVE`.
+### 1. Clone & Install
+```bash
+git clone <repository-url>
+cd MucoCheck
+npm install
+```
 
----
+### 2. Configure Environment Variables
+Copy `.env.example` to `.env.local`:
+```bash
+cp .env.example .env.local
+```
 
-## 4. Environment Variables
-
-Create a `.env.local` file in the project root:
-
+Populate `.env.local` with your project's credentials:
 ```env
 # Supabase Configuration
-NEXT_PUBLIC_SUPABASE_URL=https://rwbpxwxnxjfzhajqteje.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_wDCLZVgj5tLvvn2Y57eFCg_k79O9I-_
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
-# Nebius Token Factory (NVIDIA Open-Source Model Integration - Awaiting Team Review)
+# Nebius Token Factory (Optional - Leave blank to run in simulation mode)
 NEBIUS_API_KEY=
 NEBIUS_BASE_URL=https://api.tokenfactory.nebius.ai/v1
 NEBIUS_MODEL_NAME=nvidia/llama-3.1-nemotron-70b-instruct
 ```
 
----
-
-## 5. Getting Started
-
-### 1. Install Dependencies
-```bash
-npm install
-```
-
-### 2. Run Automated Verification Tests
-```bash
-npm test
-```
-Runs the **66-point deterministic verification suite** testing score boundaries, rounding, grade bands, mock provider outputs, Nebius error handling, file storage, MIME validation, draft lifecycle, audit trail logging, question reassignment, unreadable handwriting flagging, raw-to-scale conversion, and PDF generation.
-
-### 3. Run Development Server
+### 3. Run the Development Server
 ```bash
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### 4. Build for Production
-```bash
-npm run build
+---
+
+## 6. Supabase Database & Storage Setup
+
+### 1. Database Schema Migration
+1. Open your Supabase Project Dashboard and navigate to the **SQL Editor**.
+2. Open [`supabase/migrations/20261013000000_initial_schema.sql`](file:///a:/Code/MucoCheck/supabase/migrations/20261013000000_initial_schema.sql).
+3. Copy and run the script in the SQL Editor.
+   - This creates tables: `profiles`, `classes`, `students`, `assessments`, `assessment_questions`, `student_scripts`, `grading_results`, and `assessment_approvals`.
+   - It enables Row-Level Security (RLS) and defines ownership policies scoped to `auth.uid() = teacher_id`.
+
+### 2. Private Storage Buckets Setup
+1. In the Supabase SQL Editor, open [`supabase/migrations/20261013000001_storage_buckets.sql`](file:///a:/Code/MucoCheck/supabase/migrations/20261013000001_storage_buckets.sql).
+2. Run the script to provision the private buckets:
+   - `scripts` (Private, 50MB file size limit, PDF/image MIME validation).
+   - `reference_docs` (Private, 50MB file size limit, PDF/image MIME validation).
+   - Folder-level RLS policies restricting file uploads, reads, and deletes to `(storage.foldername(name))[1] = auth.uid()::text`.
+3. *Alternative (Dashboard UI)*: Go to **Storage > New Bucket**, create `scripts` (disable Public bucket) and `reference_docs` (disable Public bucket).
+
+---
+
+## 7. Data Flow & Grading Lifecycle
+
+```
+[Assessment Setup]
+  │  Teacher defines questions, max marks, and rubric criteria
+  ▼
+[Script Attachment]
+  │  Answer scripts uploaded to private Supabase Storage ({teacher_id}/...)
+  ▼
+[Grading Engine Pipeline]
+  │  Extracts student responses against rubric criteria
+  │  Generates provisional scores, rationale notes, and handwriting ambiguity flags
+  ▼
+[Split-Screen Teacher Review]
+  │  Provisional score displayed with "Proposed" badge
+  │  Teacher can:
+  │    - Approve proposed mark as-is
+  │    - Override mark (system logs teacher ID, prior score, new score, rationale)
+  │    - Flag unreadable handwriting
+  │    - Reassign script to another student or question
+  ▼
+[Approved Result & Markbook]
+  │  Saved as official AssessmentApproval in database
+  │  Aggregated in deterministic Markbook matrix
+  ▼
+[Report Card & Export]
+  │  Printable official student report cards
+  │  RFC4180 CSV export for institutional systems
 ```
 
 ---
 
-## 6. What Remains Before Real AI Grading Can Be Enabled
+## 8. Verification & Testing
 
-Once the Nebius account team review is approved:
-1. Provide the approved `NEBIUS_API_KEY` in `.env.local` or via the **Settings** page.
-2. The `nebius-provider.ts` module will automatically route assessment requests to `https://api.tokenfactory.nebius.ai/v1/chat/completions` using `nvidia/llama-3.1-nemotron-70b-instruct` or `nvidia/nemotron-mini-4b-instruct`.
-3. The frontend and database schemas require **zero modifications** — the grading output schema, question rubrics, uncertainty statuses, and audit tracking are already built to match the model's structured JSON output.
+MucoCheck features an automated test suite verifying scoring arithmetic, security guards, fail-closed production semantics, and file storage rules.
+
+### Run Automated Tests
+```bash
+npm test
+```
+Executes `scripts/verify-all.ts` (93 assertions):
+- **Scoring & Bounds**: Strict `0 <= score <= max_marks`, rounding modes (`half_up`, `floor`, `ceil`), raw-to-scale mapping.
+- **Provider Contracts**: Mock output conformity, error handling, edge-case fixtures.
+- **Security & Authorization**:
+  - Production `401 Unauthorized` on missing session.
+  - Production rejection of custom `x-teacher-id` identity headers.
+  - Production `403 Forbidden` on cross-teacher access attempts.
+  - Development auth isolation (`isDevAuthAllowed() === false` in production).
+- **Persistence Guarantees**:
+  - `DatabaseServiceError` thrown in production when Supabase is unreachable (no silent JSON fallback).
+  - Production storage failure on local disk fallback attempts.
+- **Audit Trails**: Timestamp, teacher identity, and override rationale recording.
+- **Reporting**: PDF stream validity and CSV formatting.
+
+### Production Build Check
+```bash
+npm run build
+```
+Compiles all 24 application routes with zero TypeScript errors or warnings.
+
+---
+
+## 9. AI Integration Status & Vision/OCR Boundary
+
+The system uses an explicit provider interface:
+```typescript
+export interface GradingProvider {
+  name: string;
+  isAvailable(): boolean;
+  evaluate(request: GradingRequest): Promise<GradingResponse>;
+}
+```
+
+### Current Status
+- **Provider**: `MockGradingProvider` is currently active.
+- **Simulation Transparency**: All mock-evaluated assessments are badged with `[MOCK PROVIDER]` and `MOCK ACTIVE` in the interface.
+- **Nebius Integration Boundary**: `src/lib/grading/nebius-provider.ts` is implemented as a clean client stub targeting NVIDIA Nemotron models on Nebius Token Factory. It parses rubric criteria and structured JSON schemas matching the existing domain models.
+
+### What Remains for Live Vision/OCR Grading
+1. **Document Page Previews & Rendering**: Reliable multi-page PDF rasterization into high-resolution images (`image/png` or `image/jpeg`).
+2. **Page-Level Crop Segmentation**: Extracting individual question regions or bounding boxes from full script pages.
+3. **Multimodal Inference**: Passing cropped question images alongside question criteria to the NVIDIA vision/multimodal endpoint on Nebius Token Factory once API credentials are supplied.
+
+---
+
+## 10. Known Limitations & Next Steps
+
+### Known Limitations
+1. **Client-Side Document Display**: Script preview currently relies on iframe/object rendering of uploaded PDF buffers. Multi-page navigation requires unified canvas rasterization.
+2. **Simulated Evaluations**: Actual handwriting extraction is simulated until vision endpoint integration is completed.
+
+### Immediate Next Steps
+1. **Document Processing Pipeline**: Implement a server/client document rasterization module to render PDF pages into inspectable image slices.
+2. **Annotation Overlay Canvas**: Add visual pin and annotation overlay controls on student script pages in the Split-Screen Review Workspace.
+3. **Live Nebius Integration**: Connect NVIDIA Nemotron vision endpoints once team account approval is granted.

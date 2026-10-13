@@ -31,7 +31,7 @@ MucoCheck features a resilient persistence and security architecture:
 
 Because Supabase storage bucket creation requires storage administrator privileges:
 
-1. Open your Supabase Dashboard: [https://supabase.com/dashboard/project/rwbpxwxnxjfzhajqteje](https://supabase.com/dashboard/project/rwbpxwxnxjfzhajqteje).
+1. Open your Supabase Dashboard: `https://supabase.com/dashboard/project/<your-project-id>`.
 2. Go to the **SQL Editor** tab.
 3. Run the SQL script in `supabase/migrations/20261013000001_storage_buckets.sql`:
    ```sql

@@ -12,12 +12,12 @@ async function runMigration() {
   console.log(`     Records: ${backup.stats.assessments} assessments, ${backup.stats.students} students, ${backup.stats.classes} classes, ${backup.stats.scripts} scripts, ${backup.stats.results} grading results.\n`);
 
   // Step 2: Check Supabase connection and schema
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://rwbpxwxnxjfzhajqteje.supabase.co";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
   const supabaseKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    "sb_publishable_wDCLZVgj5tLvvn2Y57eFCg_k79O9I-_";
+    "";
 
   console.log("2. Probing Supabase endpoint...");
   console.log(`   URL: ${supabaseUrl}`);
@@ -49,7 +49,7 @@ async function runMigration() {
       console.log("\n--------------------------------------------------");
       console.log("MANUAL SETUP INSTRUCTIONS TO APPLY MIGRATION:");
       console.log("--------------------------------------------------");
-      console.log("1. Open your Supabase Dashboard: https://supabase.com/dashboard/project/rwbpxwxnxjfzhajqteje");
+      console.log("1. Open your Supabase Dashboard: https://supabase.com/dashboard/project/<your-project-id>");
       console.log("2. Navigate to the SQL Editor.");
       console.log("3. Copy the contents of: supabase/migrations/20261013000000_initial_schema.sql");
       console.log("4. Click 'Run' to create tables, RLS policies, indexes, and private storage buckets.");
