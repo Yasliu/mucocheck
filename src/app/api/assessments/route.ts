@@ -38,7 +38,38 @@ export async function POST(req: Request) {
     }
 
     const store = await getStore(req);
+
+    // If updating an existing assessment/draft
+    if (body.id) {
+      const existing = await store.getAssessment(body.id);
+      if (existing) {
+        if (existing.teacher_id && existing.teacher_id !== teacher.id) {
+          return NextResponse.json(
+            { error: "Access denied: You do not have permission to modify this assessment." },
+            { status: 403 }
+          );
+        }
+        const updated = await (store as any).updateAssessment(body.id, teacher.id, {
+          title: body.title,
+          subject: body.subject,
+          grade_level: body.grade_level || "Grade 10",
+          section: body.section || "A",
+          class_id: body.class_id,
+          max_marks: Number(body.max_marks) || 50,
+          status: body.status || "draft",
+          date: body.date || new Date().toISOString().split("T")[0],
+          question_paper_name: body.question_paper_name,
+          question_paper_path: body.question_paper_path,
+          marking_scheme_name: body.marking_scheme_name,
+          marking_scheme_path: body.marking_scheme_path,
+          questions: body.questions || [],
+        });
+        return NextResponse.json({ success: true, assessment: updated });
+      }
+    }
+
     const created = await (store as any).createAssessment(teacher.id, {
+      id: body.id,
       title: body.title,
       subject: body.subject,
       grade_level: body.grade_level || "Grade 10",

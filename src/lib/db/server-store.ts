@@ -578,7 +578,7 @@ class ServerStore {
     });
   }
 
-  approveAllResultsForScript(scriptId: string, teacherName?: string): void {
+  approveAllResultsForScript(scriptId: string, teacherName?: string, teacherId?: string, finalScore?: number): void {
     const scriptResults = this.data.results.filter((r) => r.script_id === scriptId);
     for (const res of scriptResults) {
       const score = res.approved_score ?? res.proposed_score;
@@ -592,7 +592,14 @@ class ServerStore {
 
     const scrIdx = this.data.scripts.findIndex((s) => s.id === scriptId);
     if (scrIdx !== -1) {
-      this.data.scripts[scrIdx] = { ...this.data.scripts[scrIdx], status: "approved" };
+      const updatedScr = { ...this.data.scripts[scrIdx], status: "approved" as const };
+      if (typeof finalScore === "number") {
+        updatedScr.total_score = finalScore;
+        if (updatedScr.max_score > 0) {
+          updatedScr.percentage = Math.round((finalScore / updatedScr.max_score) * 1000) / 10;
+        }
+      }
+      this.data.scripts[scrIdx] = updatedScr;
     }
 
     this.saveData();

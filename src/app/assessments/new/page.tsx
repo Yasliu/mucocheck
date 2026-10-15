@@ -68,26 +68,7 @@ function NewAssessmentContent() {
   const [markingSchemePath, setMarkingSchemePath] = useState<string>("");
   const [uploadingRef, setUploadingRef] = useState<boolean>(false);
 
-  const [questions, setQuestions] = useState<QuestionInput[]>([
-    {
-      question_number: 1,
-      question_text: "Describe the function of ATP Synthase in the inner mitochondrial membrane.",
-      max_marks: 10,
-      criteria_text: "Proton motive force (3), F0/F1 rotor rotation (4), ADP phosphorylation (3)",
-    },
-    {
-      question_number: 2,
-      question_text: "Compare light reactions and the Calvin Cycle in chloroplasts.",
-      max_marks: 10,
-      criteria_text: "Thylakoid vs Stroma (3), ATP/NADPH transport (4), RuBisCO carbon fixation (3)",
-    },
-    {
-      question_number: 3,
-      question_text: "Calculate net ATP yield under anaerobic fermentation in yeast.",
-      max_marks: 10,
-      criteria_text: "Net 2 ATP calculation (3), Acetaldehyde & ethanol steps (4), Contrast with lactic acid (3)",
-    },
-  ]);
+  const [questions, setQuestions] = useState<QuestionInput[]>([]);
 
   // Step 3: Student Scripts
   const [scriptFiles, setScriptFiles] = useState<UploadedFileItem[]>([]);
@@ -351,12 +332,13 @@ function NewAssessmentContent() {
 
   const validateStep2 = () => {
     const errs: Record<string, string> = {};
-    if (questions.length === 0) {
-      errs.questions = "At least one assessment question is required.";
-    }
-    const qSum = questions.reduce((acc, q) => acc + Number(q.max_marks || 0), 0);
-    if (qSum !== Number(maxMarks)) {
-      errs.questionSum = `Sum of question marks (${qSum}) does not match assessment maximum marks (${maxMarks}).`;
+    // Note: Questions are optional in this phase. Teachers can rely directly on uploaded
+    // Question Paper and Marking Scheme reference documents without retyping question text.
+    if (questions.length > 0) {
+      const qSum = questions.reduce((acc, q) => acc + Number(q.max_marks || 0), 0);
+      if (qSum > Number(maxMarks)) {
+        errs.questionSum = `Sum of question marks (${qSum}) exceeds assessment maximum marks (${maxMarks}).`;
+      }
     }
     setErrors(errs);
     return Object.keys(errs).length === 0;
@@ -407,12 +389,16 @@ function NewAssessmentContent() {
 
       if (res.ok) {
         const data = await res.json();
-        setDraftAssessmentId(data.assessment.id);
+        const savedId = data.assessment?.id || assessmentId;
+        setDraftAssessmentId(savedId);
         setDraftSavedNotice("Draft saved successfully to private storage. You can resume anytime.");
         setTimeout(() => setDraftSavedNotice(""), 3500);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        alert(`Error saving draft assessment: ${errData.error || res.statusText}`);
       }
-    } catch {
-      alert("Error saving draft assessment");
+    } catch (err: unknown) {
+      alert(`Error saving draft assessment: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -456,13 +442,17 @@ function NewAssessmentContent() {
       });
 
       if (!res.ok) {
-        throw new Error("Failed to save assessment to backend");
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to save assessment to backend");
       }
 
-      // Attach script files via API
+      const resData = await res.json();
+      const actualId = resData.assessment?.id || assessmentId;
+
+      // Attach script files via API if any were uploaded
       for (const scr of scriptFiles) {
         if (scr.studentId && scr.filePath) {
-          await fetch(`/api/assessments/${assessmentId}/scripts`, {
+          const sRes = await fetch(`/api/assessments/${actualId}/scripts`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -476,10 +466,13 @@ function NewAssessmentContent() {
               page_count: 2,
             }),
           });
+          if (!sRes.ok) {
+            console.error("Failed to attach script:", scr.name);
+          }
         }
       }
 
-      router.push(`/assessments/${assessmentId}`);
+      router.push(`/assessments/${actualId}`);
     } catch (err: unknown) {
       alert(`Failed to create assessment: ${err instanceof Error ? err.message : String(err)}`);
       setIsSubmitting(false);
@@ -659,10 +652,10 @@ function NewAssessmentContent() {
         <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-6 space-y-6">
           <div>
             <h3 className="font-serif text-lg font-semibold text-[#1C1A17]">
-              2. Question Paper, Rubric & Breakdown
+              2. Reference Documents & Optional Question Breakdown
             </h3>
             <p className="text-xs text-[#6E685F] mt-1">
-              Files are validated and written to private storage on the server.
+              Upload the original exam documents. The uploaded Question Paper is the authoritative source for questions and diagrams.
             </p>
           </div>
 
@@ -671,10 +664,10 @@ function NewAssessmentContent() {
             <div className="border border-dashed border-[#D2CAB9] rounded-md p-4 bg-[#FAF8F3] text-center space-y-2">
               <Upload className="w-6 h-6 text-[#8E877D] mx-auto" />
               <p className="text-xs font-medium text-[#1C1A17]">
-                Question Paper (PDF or Image)
+                Question Paper (Reference Exam)
               </p>
               <p className="text-[11px] text-[#6E685F]">
-                {questionPaperPath ? `Persisted: ${questionPaperPath}` : "Select master reference"}
+                {questionPaperPath ? `Saved: ${questionPaperPath}` : "Master exam paper (PDF or Image)"}
               </p>
               <input
                 type="file"
@@ -688,10 +681,10 @@ function NewAssessmentContent() {
             <div className="border border-dashed border-[#D2CAB9] rounded-md p-4 bg-[#FAF8F3] text-center space-y-2">
               <FileText className="w-6 h-6 text-[#8E877D] mx-auto" />
               <p className="text-xs font-medium text-[#1C1A17]">
-                Marking Scheme / Rubric (PDF or Image)
+                Marking Scheme / Rubric (Reference Key)
               </p>
               <p className="text-[11px] text-[#6E685F]">
-                {markingSchemePath ? `Persisted: ${markingSchemePath}` : "Select answer key"}
+                {markingSchemePath ? `Saved: ${markingSchemePath}` : "Answer key & criteria (PDF or Image)"}
               </p>
               <input
                 type="file"
@@ -703,19 +696,37 @@ function NewAssessmentContent() {
             </div>
           </div>
 
+          {/* Question Breakdown Clarification Box */}
+          <div className="p-3.5 rounded bg-[#FAF8F3] border border-[#E8E2D5] text-xs space-y-1.5">
+            <div className="flex items-center gap-1.5 font-medium text-[#1C1A17]">
+              <Sparkles className="w-3.5 h-3.5 text-[#2A5A43]" />
+              <span>Optional Manual Question Breakdown</span>
+            </div>
+            <p className="text-[#6E685F] leading-relaxed">
+              You can create and evaluate this assessment using your uploaded reference documents directly against the overall maximum marks ({maxMarks} marks) without retyping questions. Manual question entry is completely optional and can also be defined or edited later.
+            </p>
+          </div>
+
           {/* Question Breakdown List */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="text-sm font-semibold text-[#1C1A17]">
-                Question Breakdown (Target Total: {maxMarks} marks)
-              </h4>
+              <div>
+                <h4 className="text-sm font-semibold text-[#1C1A17]">
+                  Defined Questions ({questions.length})
+                </h4>
+                {questions.length > 0 && (
+                  <p className="text-[11px] text-[#6E685F]">
+                    Defined marks sum: {questions.reduce((acc, q) => acc + Number(q.max_marks || 0), 0)} / Overall max: {maxMarks} marks
+                  </p>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleAddQuestion}
                 className="inline-flex items-center gap-1 text-xs text-[#2A5A43] hover:text-[#214734] font-medium"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Add Question</span>
+                <span>Add Question Breakdown</span>
               </button>
             </div>
 
@@ -726,27 +737,32 @@ function NewAssessmentContent() {
               </div>
             )}
 
-            <div className="space-y-3">
-              {questions.map((q, idx) => (
-                <div
-                  key={idx}
-                  className="p-3.5 rounded border border-[#E8E2D5] bg-[#FAF8F3] space-y-2 text-xs"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-[#1C1A17]">
-                      Question {q.question_number}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[#6E685F]">Max Marks:</span>
-                      <input
-                        type="number"
-                        value={q.max_marks}
-                        onChange={(e) =>
-                          handleQuestionChange(idx, "max_marks", Number(e.target.value))
-                        }
-                        className="w-16 p-1 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-right font-mono"
-                      />
-                      {questions.length > 1 && (
+            {questions.length === 0 ? (
+              <div className="p-6 text-center border border-dashed border-[#D2CAB9] rounded-md bg-[#FAF8F3] text-xs text-[#6E685F] space-y-1">
+                <p className="font-medium text-[#1C1A17]">No manual questions defined</p>
+                <p>The assessment will reference your uploaded Question Paper and Marking Scheme directly. Click &quot;Add Question Breakdown&quot; above if you want to define structured question checkpoints.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {questions.map((q, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3.5 rounded border border-[#E8E2D5] bg-[#FAF8F3] space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[#1C1A17]">
+                        Question {q.question_number}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[#6E685F]">Max Marks:</span>
+                        <input
+                          type="number"
+                          value={q.max_marks}
+                          onChange={(e) =>
+                            handleQuestionChange(idx, "max_marks", Number(e.target.value))
+                          }
+                          className="w-16 p-1 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-right font-mono"
+                        />
                         <button
                           type="button"
                           onClick={() => handleRemoveQuestion(idx)}
@@ -754,39 +770,39 @@ function NewAssessmentContent() {
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
-                      )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <input
+                        type="text"
+                        value={q.question_text}
+                        onChange={(e) =>
+                          handleQuestionChange(idx, "question_text", e.target.value)
+                        }
+                        placeholder="Question prompt or label..."
+                        className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] text-[#6E685F] block mb-0.5">
+                        Rubric Criteria (comma separated checkpoints):
+                      </label>
+                      <input
+                        type="text"
+                        value={q.criteria_text}
+                        onChange={(e) =>
+                          handleQuestionChange(idx, "criteria_text", e.target.value)
+                        }
+                        placeholder="e.g. Formula (2), Intermediate steps (2), Conclusion (1)"
+                        className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded"
+                      />
                     </div>
                   </div>
-
-                  <div>
-                    <input
-                      type="text"
-                      value={q.question_text}
-                      onChange={(e) =>
-                        handleQuestionChange(idx, "question_text", e.target.value)
-                      }
-                      placeholder="Question prompt or instructions..."
-                      className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] text-[#6E685F] block mb-0.5">
-                      Rubric Criteria (comma separated checkpoints):
-                    </label>
-                    <input
-                      type="text"
-                      value={q.criteria_text}
-                      onChange={(e) =>
-                        handleQuestionChange(idx, "criteria_text", e.target.value)
-                      }
-                      placeholder="e.g. Formula (2), Intermediate steps (2), Conclusion (1)"
-                      className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -796,11 +812,16 @@ function NewAssessmentContent() {
         <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-6 space-y-6">
           <div>
             <h3 className="font-serif text-lg font-semibold text-[#1C1A17]">
-              3. Student Answer Scripts
+              3. Student Answer Scripts (Optional at Creation)
             </h3>
             <p className="text-xs text-[#6E685F] mt-1">
-              Files are physically uploaded to private server storage and matched to student records.
+              Upload student answer submissions now, or skip this step and attach them later from the assessment workspace.
             </p>
+          </div>
+
+          <div className="p-3 rounded bg-[#EFF5F1] border border-[#BCD4C7] text-xs text-[#2A5A43] flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>Reference documents (Question Paper & Marking Scheme) were captured in Step 2. Only student submission scripts belong here.</span>
           </div>
 
           {/* Upload Row */}
@@ -841,15 +862,16 @@ function NewAssessmentContent() {
           {/* Uploaded Scripts Roster */}
           <div className="space-y-2">
             <h4 className="text-xs font-semibold text-[#1C1A17] flex items-center justify-between">
-              <span>Attached Scripts ({scriptFiles.length})</span>
+              <span>Attached Student Scripts ({scriptFiles.length})</span>
               <span className="text-[#6E685F] font-normal">
-                Files are validated against 25MB limits
+                PDF and image formats supported (up to 25MB)
               </span>
             </h4>
 
             {scriptFiles.length === 0 ? (
-              <div className="py-8 text-center text-[#8E877D] border border-dashed border-[#D2CAB9] rounded-md text-xs">
-                No scripts attached yet. Upload scripts now or add them later.
+              <div className="py-8 text-center text-[#8E877D] border border-dashed border-[#D2CAB9] rounded-md text-xs space-y-1">
+                <p className="font-medium text-[#1C1A17]">No student scripts uploaded yet</p>
+                <p>You can proceed to finalize the assessment now and upload student submissions whenever they are collected.</p>
               </div>
             ) : (
               <div className="divide-y divide-[#E8E2D5] border border-[#E8E2D5] rounded-md bg-[#FFFFFF] overflow-hidden text-xs">
@@ -903,10 +925,10 @@ function NewAssessmentContent() {
         <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-6 space-y-6">
           <div>
             <h3 className="font-serif text-lg font-semibold text-[#1C1A17]">
-              4. Review Assessment & Processing Plan
+              4. Review Assessment Summary
             </h3>
             <p className="text-xs text-[#6E685F] mt-1">
-              Verify configuration prior to initiating the evaluation workspace.
+              Verify configuration prior to saving and opening the assessment workspace.
             </p>
           </div>
 
@@ -928,25 +950,40 @@ function NewAssessmentContent() {
                 </p>
               </div>
               <div>
-                <span className="text-[#6E685F]">Maximum Marks</span>
+                <span className="text-[#6E685F]">Overall Max Marks</span>
                 <p className="font-medium text-[#1C1A17] mt-0.5">{maxMarks}</p>
               </div>
             </div>
 
-            <div className="pt-3 border-t border-[#E8E2D5] flex items-center justify-between text-[#6E685F]">
-              <span>Questions Configured: {questions.length}</span>
-              <span>Answer Scripts Uploaded: {scriptFiles.length}</span>
+            <div className="pt-3 border-t border-[#E8E2D5] grid grid-cols-1 sm:grid-cols-3 gap-2 text-[#6E685F]">
+              <div>
+                <span className="block text-[11px] text-[#8E877D]">Question Paper:</span>
+                <span className="font-medium text-[#1C1A17]">{questionPaperFile?.name || (questionPaperPath ? "Attached" : "None")}</span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-[#8E877D]">Marking Scheme:</span>
+                <span className="font-medium text-[#1C1A17]">{markingSchemeFile?.name || (markingSchemePath ? "Attached" : "None")}</span>
+              </div>
+              <div>
+                <span className="block text-[11px] text-[#8E877D]">Questions Configured:</span>
+                <span className="font-medium text-[#1C1A17]">{questions.length > 0 ? `${questions.length} questions` : "Using Reference Docs Directly"}</span>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-[#E8E2D5] flex items-center justify-between text-[#6E685F]">
+              <span>Attached Student Scripts: {scriptFiles.length}</span>
+              <span>Status: {scriptFiles.length > 0 ? "Ready for review" : "Ready (scripts pending)"}</span>
             </div>
           </div>
 
-          {/* Processing Pipeline Stage Explainer */}
+          {/* Document & Evaluation Clarification */}
           <div className="p-4 rounded border border-[#BCD4C7] bg-[#EFF5F1] text-xs space-y-2">
             <div className="flex items-center gap-2 font-medium text-[#2A5A43]">
-              <Sparkles className="w-4 h-4 text-[#2A5A43]" />
-              <span>Assessment Pipeline Architecture</span>
+              <CheckCircle2 className="w-4 h-4 text-[#2A5A43]" />
+              <span>Reference Documents & Privacy</span>
             </div>
             <p className="text-[#2A5A43] leading-relaxed">
-              Documents are safely stored in private storage. Evaluations are staged with the deterministic provider and marked as <strong>AI Proposed</strong> pending teacher sign-off.
+              All documents are stored securely in private storage. The original Question Paper serves as the primary exam reference in the split-screen workspace, and all marks remain provisional until approved by the teacher.
             </p>
           </div>
         </div>

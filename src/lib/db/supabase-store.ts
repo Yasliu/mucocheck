@@ -412,23 +412,29 @@ export class SupabaseStore {
     const data = typeof teacherIdOrData === "object" ? teacherIdOrData : dataMaybe;
     const validTeacherId = normalizeUuid(teacherId);
 
+    const insertPayload: Record<string, any> = {
+      teacher_id: validTeacherId,
+      title: data.title,
+      subject: data.subject,
+      grade_level: data.grade_level,
+      section: data.section,
+      class_id: data.class_id || null,
+      max_marks: data.max_marks,
+      status: data.status || "draft",
+      date: data.date || new Date().toISOString().split("T")[0],
+      question_paper_path: data.question_paper_path || null,
+      question_paper_name: data.question_paper_name || null,
+      marking_scheme_path: data.marking_scheme_path || null,
+      marking_scheme_name: data.marking_scheme_name || null,
+    };
+
+    if (data.id) {
+      insertPayload.id = normalizeUuid(data.id);
+    }
+
     const { data: assessmentData, error: assessmentError } = await this.client
       .from("assessments")
-      .insert({
-        teacher_id: validTeacherId,
-        title: data.title,
-        subject: data.subject,
-        grade_level: data.grade_level,
-        section: data.section,
-        class_id: data.class_id || null,
-        max_marks: data.max_marks,
-        status: data.status || "draft",
-        date: data.date || new Date().toISOString().split("T")[0],
-        question_paper_path: data.question_paper_path || null,
-        question_paper_name: data.question_paper_name || null,
-        marking_scheme_path: data.marking_scheme_path || null,
-        marking_scheme_name: data.marking_scheme_name || null,
-      })
+      .insert(insertPayload)
       .select()
       .single();
 
@@ -481,7 +487,15 @@ export class SupabaseStore {
   async updateAssessment(
     id: string,
     teacherId: string,
-    updates: Partial<Assessment>
+    updates: Partial<Assessment> & {
+      questions?: Array<{
+        question_number: number;
+        question_text?: string;
+        max_marks: number;
+        rubric_criteria?: any[];
+        model_answer?: string;
+      }>;
+    }
   ): Promise<Assessment | null> {
     const validTeacherId = normalizeUuid(teacherId);
     const payload: Record<string, unknown> = {
@@ -509,6 +523,28 @@ export class SupabaseStore {
 
     if (error) {
       throw new Error(`Failed to update assessment: ${error.message}`);
+    }
+
+    if (updates.questions && Array.isArray(updates.questions)) {
+      // Refresh questions for this assessment
+      await this.client
+        .from("assessment_questions")
+        .delete()
+        .eq("assessment_id", id);
+
+      if (updates.questions.length > 0) {
+        const questionsPayload = updates.questions.map((q: any) => ({
+          assessment_id: id,
+          question_number: q.question_number,
+          question_text: q.question_text || `Question ${q.question_number}`,
+          max_marks: Number(q.max_marks) || 1,
+          rubric_criteria: q.rubric_criteria || [],
+          model_answer: q.model_answer || null,
+        }));
+        await this.client
+          .from("assessment_questions")
+          .insert(questionsPayload);
+      }
     }
 
     return this.getAssessment(id, teacherId);
@@ -871,7 +907,7 @@ export class SupabaseStore {
     });
   }
 
-  async approveAllResultsForScript(scriptId: string, teacherName?: string, teacherId?: string): Promise<void> {
+  async approveAllResultsForScript(scriptId: string, teacherName?: string, teacherId?: string, finalScore?: number): Promise<void> {
     const { data: results } = await this.client
       .from("grading_results")
       .select("*")
@@ -881,7 +917,11 @@ export class SupabaseStore {
     for (const res of results || []) {
       await this.approveGradingResult(res.id, res.approved_score ?? res.proposed_score, "Bulk approved with script", teacherName, tid);
     }
-    await this.client.from("student_scripts").update({ status: "approved" }).eq("id", scriptId);
+    const updatePayload: Record<string, unknown> = { status: "approved" };
+    if (typeof finalScore === "number") {
+      updatePayload.total_score = finalScore;
+    }
+    await this.client.from("student_scripts").update(updatePayload).eq("id", scriptId);
   }
 
   async saveGradingProposal(

@@ -513,6 +513,77 @@ async function runVerification() {
   assert(detectDocumentType("image/webp", "scan.webp") === "image", "Detects WebP image");
   assert(detectDocumentType("application/zip", "archive.zip") === "unsupported", "Identifies unsupported file formats");
 
+  // 21. Assessment Creation Workflow & Document Role Verification
+  console.log("\n--- 21. Assessment Creation Workflow & Document Roles ---");
+  const { serverStore: testStore } = await import("../src/lib/db/server-store");
+  const testAssessmentId = `asm-test-draft-${Date.now()}`;
+
+  // Test creating draft assessment without questions
+  const draftAsm = testStore.createAssessment({
+    id: testAssessmentId,
+    title: "Draft Exam Biology",
+    subject: "Biology",
+    grade_level: "Grade 10",
+    section: "A",
+    max_marks: 50,
+    status: "draft",
+    date: "2026-10-15",
+    question_paper_name: "Original_Exam_Paper.pdf",
+    question_paper_path: "reference_docs/papers/Original_Exam_Paper.pdf",
+    marking_scheme_name: "Original_Marking_Scheme.pdf",
+    marking_scheme_path: "reference_docs/schemes/Original_Marking_Scheme.pdf",
+    questions: [],
+  });
+  assert(draftAsm.id === testAssessmentId, "Draft assessment created with custom ID");
+  assert(draftAsm.status === "draft", "Assessment saved as draft status");
+  assert(draftAsm.question_paper_name === "Original_Exam_Paper.pdf", "Question paper preserved as reference doc");
+  assert(draftAsm.marking_scheme_name === "Original_Marking_Scheme.pdf", "Marking scheme preserved as reference doc");
+  assert(draftAsm.marking_scheme_name !== draftAsm.question_paper_name, "Marking scheme and question paper are separate files");
+
+  // Verify updating existing draft without duplicate key error
+  const updatedDraft = testStore.updateAssessment(testAssessmentId, {
+    title: "Finalized Exam Biology",
+    status: "ready",
+    max_marks: 60,
+  });
+  assert(updatedDraft?.title === "Finalized Exam Biology", "Draft updated successfully without collision");
+  assert(updatedDraft?.max_marks === 60, "Updated max marks reflected");
+
+  // Verify questions are optional: reading questions returns empty array
+  const questionsList = testStore.getQuestions(testAssessmentId);
+  assert(questionsList.length === 0, "Assessments without manual questions are valid and return empty questions list");
+
+  // Verify scripts are optional at creation: scripts list returns empty array
+  const scriptsList = testStore.getScripts(testAssessmentId);
+  assert(scriptsList.length === 0, "Assessments without uploaded student scripts are valid and return empty scripts list");
+
+  // Verify student script is strictly distinct from marking scheme
+  const attachedScript = testStore.addScript({
+    assessment_id: testAssessmentId,
+    teacher_id: "usr-teacher-001",
+    student_id: "stu-001",
+    student_name: "Sarah Jenkins",
+    roll_number: "BIO-001",
+    file_name: "sarah_jenkins_answer_script.pdf",
+    file_path: "scripts/sarah_jenkins_answer_script.pdf",
+    file_size: 2048,
+    mime_type: "application/pdf",
+    page_count: 3,
+    status: "uploaded",
+    total_score: null,
+    max_score: 60,
+    percentage: null,
+  });
+  assert(attachedScript.file_name !== updatedDraft?.marking_scheme_name, "Student answer script is strictly distinct from marking scheme");
+  assert(attachedScript.student_id === "stu-001", "Script correctly associated with candidate");
+
+  // Verify whole-script score approval without questions
+  testStore.approveAllResultsForScript(attachedScript.id, "Dr. Vance", "usr-teacher-001", 54);
+  const updatedScript = testStore.getScript(attachedScript.id);
+  assert(updatedScript?.status === "approved", "Script approved directly without per-question checkpoints");
+  assert(updatedScript?.total_score === 54, "Script total score recorded as 54 marks");
+  assert(updatedScript?.percentage === 90, "Script percentage calculated as 90% (54/60)");
+
   console.log(`\n==================================================`);
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);
   console.log(`==================================================`);

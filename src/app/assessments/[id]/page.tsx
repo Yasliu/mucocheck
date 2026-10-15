@@ -33,13 +33,33 @@ export default function AssessmentDetailPage({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const asm = repository.getAssessment(assessmentId);
-    if (asm) {
-      setAssessment(asm);
-      setQuestions(repository.getQuestions(assessmentId));
-      setScripts(repository.getScripts(assessmentId));
+    async function loadAssessmentDetail() {
+      try {
+        const res = await fetch(`/api/assessments/${assessmentId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.assessment) {
+            setAssessment(data.assessment);
+            setQuestions(data.questions || []);
+            setScripts(data.scripts || []);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch assessment detail from API:", err);
+      }
+
+      const asm = repository.getAssessment(assessmentId);
+      if (asm) {
+        setAssessment(asm);
+        setQuestions(repository.getQuestions(assessmentId));
+        setScripts(repository.getScripts(assessmentId));
+      }
+      setLoading(false);
     }
-    setLoading(false);
+
+    loadAssessmentDetail();
   }, [assessmentId]);
 
   if (loading) {
@@ -200,33 +220,39 @@ export default function AssessmentDetailPage({
         <h3 className="font-serif text-base font-semibold text-[#1C1A17]">
           Configured Questions & Criteria
         </h3>
-        <div className="divide-y divide-[#E8E2D5] border border-[#E8E2D5] rounded-md overflow-hidden text-xs">
-          {questions.map((q) => (
-            <div key={q.id} className="p-3.5 space-y-1.5 hover:bg-[#FAF8F3]">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-[#1C1A17]">
-                  Question {q.question_number} ({q.max_marks} marks)
-                </span>
-                <span className="text-[#6E685F] text-[11px]">
-                  {q.rubric_criteria.length} criteria defined
-                </span>
-              </div>
-              <p className="text-[#1C1A17]">{q.question_text}</p>
-              {q.rubric_criteria.length > 0 && (
-                <div className="pt-1 flex flex-wrap gap-1.5">
-                  {q.rubric_criteria.map((c) => (
-                    <span
-                      key={c.id}
-                      className="px-2 py-0.5 bg-[#F6F3EB] text-[#6E685F] rounded text-[11px]"
-                    >
-                      {c.criterion} ({c.marks}m)
-                    </span>
-                  ))}
+        {questions.length === 0 ? (
+          <div className="p-4 rounded border border-dashed border-[#D2CAB9] bg-[#FAF8F3] text-xs text-[#6E685F]">
+            No individual questions defined. Grading references the uploaded Question Paper and Marking Scheme directly against the overall maximum of {assessment.max_marks} marks.
+          </div>
+        ) : (
+          <div className="divide-y divide-[#E8E2D5] border border-[#E8E2D5] rounded-md overflow-hidden text-xs">
+            {questions.map((q) => (
+              <div key={q.id} className="p-3.5 space-y-1.5 hover:bg-[#FAF8F3]">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[#1C1A17]">
+                    Question {q.question_number} ({q.max_marks} marks)
+                  </span>
+                  <span className="text-[#6E685F] text-[11px]">
+                    {q.rubric_criteria.length} criteria defined
+                  </span>
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+                <p className="text-[#1C1A17]">{q.question_text}</p>
+                {q.rubric_criteria.length > 0 && (
+                  <div className="pt-1 flex flex-wrap gap-1.5">
+                    {q.rubric_criteria.map((c) => (
+                      <span
+                        key={c.id}
+                        className="px-2 py-0.5 bg-[#F6F3EB] text-[#6E685F] rounded text-[11px]"
+                      >
+                        {c.criterion} ({c.marks}m)
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Student Answer Scripts Table */}
@@ -235,12 +261,14 @@ export default function AssessmentDetailPage({
           <h3 className="font-serif text-base font-semibold text-[#1C1A17]">
             Student Answer Scripts ({scripts.length})
           </h3>
-          <Link
-            href={`/assessments/${assessment.id}/review`}
-            className="text-xs font-medium text-[#2A5A43] hover:underline"
-          >
-            Open in review workspace &rarr;
-          </Link>
+          {scripts.length > 0 && (
+            <Link
+              href={`/assessments/${assessment.id}/review`}
+              className="text-xs font-medium text-[#2A5A43] hover:underline"
+            >
+              Open in review workspace &rarr;
+            </Link>
+          )}
         </div>
 
         <div className="border border-[#E8E2D5] rounded-md overflow-hidden">
@@ -257,32 +285,40 @@ export default function AssessmentDetailPage({
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E8E2D5]">
-              {scripts.map((scr) => (
-                <tr key={scr.id} className="hover:bg-[#FAF8F3]">
-                  <td className="py-2.5 px-3 font-mono text-[#6E685F]">
-                    {scr.roll_number}
-                  </td>
-                  <td className="py-2.5 px-3 font-medium text-[#1C1A17]">
-                    {scr.student_name}
-                  </td>
-                  <td className="py-2.5 px-3 text-[#6E685F]">{scr.file_name}</td>
-                  <td className="py-2.5 px-3 text-[#6E685F]">{scr.page_count}</td>
-                  <td className="py-2.5 px-3 font-mono font-medium text-[#1C1A17]">
-                    {scr.total_score !== null ? `${scr.total_score} / ${assessment.max_marks}` : "—"}
-                  </td>
-                  <td className="py-2.5 px-3">
-                    <StatusBadge status={scr.status} />
-                  </td>
-                  <td className="py-2.5 px-3 text-right">
-                    <Link
-                      href={`/assessments/${assessment.id}/review?scriptId=${scr.id}`}
-                      className="inline-flex items-center gap-1 text-[#2A5A43] hover:text-[#214734] font-medium"
-                    >
-                      <span>Review</span>
-                    </Link>
+              {scripts.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-8 text-center text-[#8E877D] text-xs">
+                    No student scripts attached yet.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                scripts.map((scr) => (
+                  <tr key={scr.id} className="hover:bg-[#FAF8F3]">
+                    <td className="py-2.5 px-3 font-mono text-[#6E685F]">
+                      {scr.roll_number}
+                    </td>
+                    <td className="py-2.5 px-3 font-medium text-[#1C1A17]">
+                      {scr.student_name}
+                    </td>
+                    <td className="py-2.5 px-3 text-[#6E685F]">{scr.file_name}</td>
+                    <td className="py-2.5 px-3 text-[#6E685F]">{scr.page_count}</td>
+                    <td className="py-2.5 px-3 font-mono font-medium text-[#1C1A17]">
+                      {scr.total_score !== null ? `${scr.total_score} / ${assessment.max_marks}` : "—"}
+                    </td>
+                    <td className="py-2.5 px-3">
+                      <StatusBadge status={scr.status} />
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      <Link
+                        href={`/assessments/${assessment.id}/review?scriptId=${scr.id}`}
+                        className="inline-flex items-center gap-1 text-[#2A5A43] hover:text-[#214734] font-medium"
+                      >
+                        <span>Review</span>
+                      </Link>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

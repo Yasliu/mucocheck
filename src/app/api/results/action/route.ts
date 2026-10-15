@@ -34,7 +34,12 @@ export async function POST(req: Request) {
         );
       }
 
-      await (store as any).approveAllResultsForScript(scriptId, effectiveTeacherName, teacher.id);
+      await (store as any).approveAllResultsForScript(
+        scriptId,
+        effectiveTeacherName,
+        teacher.id,
+        typeof finalScore === "number" ? finalScore : undefined
+      );
       return NextResponse.json({ success: true, message: "Script results approved." });
     }
 

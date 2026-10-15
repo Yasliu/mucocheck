@@ -136,6 +136,53 @@ function ReviewWorkspaceContent({
     }
   }, [currentResult]);
 
+  useEffect(() => {
+    if (questions.length === 0 && currentScript) {
+      setTeacherScore(currentScript.total_score !== null ? currentScript.total_score : "");
+      setTeacherFeedback("");
+      setErrorMsg("");
+      setSaveSuccessMsg("");
+    }
+  }, [currentScript, questions.length]);
+
+  const handleSaveWholeScriptScore = async () => {
+    if (!currentScript || !assessment) return;
+    const numScore = Number(teacherScore);
+    if (isNaN(numScore) || numScore < 0 || numScore > assessment.max_marks) {
+      setErrorMsg(`Score must be between 0 and ${assessment.max_marks} marks.`);
+      return;
+    }
+    setErrorMsg("");
+    try {
+      await fetch("/api/results/action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "approve_script",
+          scriptId: currentScript.id,
+          finalScore: numScore,
+          teacherName: "Dr. Eleanor Vance",
+        }),
+      });
+
+      repository.approveAllResultsForScript(currentScript.id, numScore);
+
+      // Re-fetch state
+      const res = await fetch(`/api/assessments/${assessmentId}`);
+      if (res.ok) {
+        const d = await res.json();
+        setAssessment(d.assessment);
+        setScripts(d.scripts);
+        setResults(d.results);
+      }
+
+      setSaveSuccessMsg("Student score approved and recorded successfully!");
+      setTimeout(() => setSaveSuccessMsg(""), 3500);
+    } catch {
+      setErrorMsg("Failed to save student score");
+    }
+  };
+
   const handleSaveAndApprove = async (markAsApproved = true) => {
     if (!currentResult || !currentQuestion) return;
 
@@ -473,10 +520,119 @@ function ReviewWorkspaceContent({
 
         {/* Right Side: Grading Result, Rubric & Teacher Approval (5 cols) */}
         <div className="lg:col-span-5 bg-[#FFFFFF] border border-[#E8E2D5] rounded-md flex flex-col shadow-2xs overflow-hidden">
-          {/* Question Selector Tabs */}
-          <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
-            <span className="font-semibold text-[#1C1A17]">Question Rubric</span>
-            <div className="flex items-center gap-1">
+          {questions.length === 0 ? (
+            <div className="flex-1 p-5 space-y-4 overflow-y-auto text-xs">
+              <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] -m-5 mb-4">
+                <span className="font-semibold text-[#1C1A17]">Reference Document Scoring</span>
+              </div>
+
+              <div className="space-y-1">
+                <h3 className="font-serif text-base font-semibold text-[#1C1A17]">
+                  Whole Script Review
+                </h3>
+                <p className="text-xs text-[#6E685F] leading-relaxed">
+                  This assessment relies directly on uploaded reference documents without manual question breakdowns. Grade the submission against the overall maximum score ({assessment.max_marks} marks) using the Question Paper and Marking Scheme.
+                </p>
+              </div>
+
+              {/* Reference Documents Card */}
+              <div className="p-3 bg-[#FAF8F3] border border-[#E8E2D5] rounded-md space-y-2">
+                <span className="font-semibold text-[#1C1A17] block">Reference Exam Documents</span>
+                <div className="space-y-1 text-[#6E685F]">
+                  <div className="flex items-center justify-between">
+                    <span>Question Paper:</span>
+                    <span className="font-medium text-[#1C1A17]">{assessment.question_paper_name || "Exam Paper"}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Marking Scheme:</span>
+                    <span className="font-medium text-[#1C1A17]">{assessment.marking_scheme_name || "Marking Rubric"}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Student details */}
+              <div className="p-3.5 rounded border border-[#E8E2D5] bg-[#FAF8F3] space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[#1C1A17]">Student Submission</span>
+                  <StatusBadge status={currentScript?.status || "uploaded"} />
+                </div>
+                <div className="flex items-center justify-between text-[#6E685F]">
+                  <span>Candidate: {currentScript?.student_name}</span>
+                  <span className="font-mono">{currentScript?.roll_number}</span>
+                </div>
+                {currentScript?.total_score !== null && (
+                  <div className="pt-2 border-t border-[#E8E2D5] flex items-center justify-between">
+                    <span className="text-[#6E685F]">Current Approved Score:</span>
+                    <span className="font-mono font-bold text-[#2A5A43]">
+                      {currentScript?.total_score} / {assessment.max_marks} marks
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Score Input Form */}
+              <div className="space-y-3 pt-3 border-t border-[#E8E2D5]">
+                <label className="font-semibold text-[#1C1A17] text-xs block">
+                  Teacher Approved Score *
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    max={assessment.max_marks}
+                    value={teacherScore}
+                    onChange={(e) => setTeacherScore(e.target.value)}
+                    className="w-24 p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-base font-bold font-mono text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
+                  />
+                  <span className="text-xs text-[#6E685F]">
+                    out of {assessment.max_marks} marks
+                  </span>
+                </div>
+
+                <div>
+                  <label className="font-medium text-[#1C1A17] text-xs block mb-1">
+                    Teacher Feedback & Comments:
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={teacherFeedback}
+                    onChange={(e) => setTeacherFeedback(e.target.value)}
+                    placeholder="Enter teacher comments and overall feedback for this student..."
+                    className="w-full p-2 bg-[#FFFFFF] border border-[#E8E2D5] rounded text-xs text-[#1C1A17] focus:border-[#2A5A43] focus:outline-hidden"
+                  />
+                </div>
+
+                {errorMsg && (
+                  <div className="p-2 rounded bg-[#FDF2EE] border border-[#F1CDC3] text-xs text-[#C25B3E]">
+                    {errorMsg}
+                  </div>
+                )}
+
+                {saveSuccessMsg && (
+                  <div className="p-2 rounded bg-[#EFF5F1] border border-[#BCD4C7] text-xs text-[#2A5A43]">
+                    {saveSuccessMsg}
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveWholeScriptScore}
+                    className="w-full inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded bg-[#2A5A43] hover:bg-[#214734] text-[#FBF9F5] font-medium text-xs transition-colors shadow-xs"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Approve Student Score</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Question Selector Tabs */}
+              <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
+                <span className="font-semibold text-[#1C1A17]">Question Rubric</span>
+                <div className="flex items-center gap-1">
               {questions.map((q) => {
                 const res = results.find(
                   (r) =>
@@ -727,6 +883,8 @@ function ReviewWorkspaceContent({
               <span>Approve Mark</span>
             </button>
           </div>
+            </>
+          )}
         </div>
       </div>
 

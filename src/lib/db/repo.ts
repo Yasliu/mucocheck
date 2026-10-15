@@ -818,7 +818,7 @@ class Repository {
     });
   }
 
-  approveAllResultsForScript(scriptId: string): void {
+  approveAllResultsForScript(scriptId: string, finalScore?: number): void {
     const scriptResults = this.results.filter((r) => r.script_id === scriptId);
     for (const res of scriptResults) {
       const score = res.approved_score ?? res.proposed_score;
@@ -831,7 +831,14 @@ class Repository {
     if (scr) {
       const idx = this.scripts.findIndex((s) => s.id === scriptId);
       if (idx !== -1) {
-        this.scripts[idx] = { ...this.scripts[idx], status: "approved" };
+        const updated = { ...this.scripts[idx], status: "approved" as const };
+        if (typeof finalScore === "number") {
+          updated.total_score = finalScore;
+          if (updated.max_score > 0) {
+            updated.percentage = Math.round((finalScore / updated.max_score) * 1000) / 10;
+          }
+        }
+        this.scripts[idx] = updated;
       }
     }
   }
