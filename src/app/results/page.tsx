@@ -9,9 +9,28 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 
 export default function ResultsHubPage() {
   const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setAssessments(repository.getAssessments());
+    async function fetchAssessments() {
+      try {
+        const res = await fetch("/api/assessments");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.assessments)) {
+            setAssessments(data.assessments);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch assessments for results hub:", err);
+      }
+      setAssessments(repository.getAssessments());
+      setLoading(false);
+    }
+
+    fetchAssessments();
   }, []);
 
   return (
@@ -27,7 +46,18 @@ export default function ResultsHubPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {assessments.length === 0 ? (
+        <div className="bg-[#FFFFFF] border border-dashed border-[#D2CAB9] rounded-md p-8 text-center space-y-3">
+          <TableProperties className="w-8 h-8 text-[#8E877D] mx-auto" />
+          <h4 className="text-sm font-medium text-[#1C1A17]">
+            No assessment results available
+          </h4>
+          <p className="text-xs text-[#6E685F] max-w-sm mx-auto">
+            Once you create an assessment and upload student scripts, their score matrices and approved grades will appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {assessments.map((asm) => (
           <div
             key={asm.id}
@@ -81,6 +111,7 @@ export default function ResultsHubPage() {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

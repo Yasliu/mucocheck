@@ -44,7 +44,22 @@ export default function ClassesPage() {
     }>
   >([]);
 
-  const loadData = () => {
+  const loadData = async () => {
+    try {
+      const res = await fetch("/api/classes");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.classes)) {
+          setClasses(data.classes);
+          if (data.classes.length > 0 && !selectedClassId) {
+            setSelectedClassId(data.classes[0].id);
+          }
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Could not fetch classes from API:", err);
+    }
     const clsList = repository.getClasses();
     setClasses(clsList);
     if (clsList.length > 0 && !selectedClassId) {
@@ -57,9 +72,26 @@ export default function ClassesPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedClassId) {
+    if (!selectedClassId) {
+      setStudents([]);
+      return;
+    }
+    async function fetchStudentsForClass() {
+      try {
+        const res = await fetch(`/api/students?classId=${selectedClassId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.students)) {
+            setStudents(data.students);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch students from API:", err);
+      }
       setStudents(repository.getStudents(selectedClassId));
     }
+    fetchStudentsForClass();
   }, [selectedClassId]);
 
   const handleSaveClass = () => {

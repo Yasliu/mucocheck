@@ -24,9 +24,33 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setAssessments(repository.getAssessments());
-    setClasses(repository.getClasses());
-    setLoading(false);
+    async function fetchDashboardData() {
+      try {
+        const [asmRes, clsRes] = await Promise.all([
+          fetch("/api/assessments"),
+          fetch("/api/classes"),
+        ]);
+
+        if (asmRes.ok) {
+          const data = await asmRes.json();
+          if (Array.isArray(data.assessments)) {
+            setAssessments(data.assessments);
+          }
+        }
+        if (clsRes.ok) {
+          const data = await clsRes.json();
+          if (Array.isArray(data.classes)) {
+            setClasses(data.classes);
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch overview data from API:", err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchDashboardData();
   }, []);
 
   const totalStudents = classes.reduce((sum, c) => sum + (c.student_count || 0), 0);
@@ -268,43 +292,37 @@ export default function DashboardPage() {
               Action Queue
             </h3>
 
-            <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4 space-y-3 shadow-2xs">
-              <div className="flex items-start gap-2.5 pb-3 border-b border-[#E8E2D5]">
-                <AlertTriangle className="w-4 h-4 text-[#C25B3E] shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="text-xs font-semibold text-[#1C1A17]">
-                    Handwriting Uncertainty Flag
-                  </h4>
-                  <p className="text-xs text-[#6E685F] mt-0.5">
-                    Callum O&apos;Connor (BIO-103) has smudged subscript on Q1 requiring visual check.
-                  </p>
-                  <Link
-                    href="/assessments/asm-bio-midterm/review"
-                    className="inline-block mt-2 text-xs font-medium text-[#C25B3E] hover:underline"
-                  >
-                    Inspect script &rarr;
-                  </Link>
-                </div>
+            {awaitingReview.length === 0 ? (
+              <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4 text-center space-y-1 shadow-2xs">
+                <CheckCircle2 className="w-5 h-5 text-[#2A5A43] mx-auto" />
+                <p className="text-xs font-medium text-[#1C1A17]">All caught up</p>
+                <p className="text-[11px] text-[#6E685F]">
+                  No scripts or assessments currently awaiting your review.
+                </p>
               </div>
-
-              <div className="flex items-start gap-2.5">
-                <CheckCircle2 className="w-4 h-4 text-[#2A5A43] shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="text-xs font-semibold text-[#1C1A17]">
-                    Markbook Ready
-                  </h4>
-                  <p className="text-xs text-[#6E685F] mt-0.5">
-                    Cellular Respiration Midterm has 3 scripts ready for final batch sign-off.
-                  </p>
-                  <Link
-                    href="/assessments/asm-bio-midterm/markbook"
-                    className="inline-block mt-2 text-xs font-medium text-[#2A5A43] hover:underline"
-                  >
-                    Open Markbook &rarr;
-                  </Link>
-                </div>
+            ) : (
+              <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4 space-y-3 shadow-2xs">
+                {awaitingReview.slice(0, 3).map((asm) => (
+                  <div key={asm.id} className="flex items-start gap-2.5 pb-2 border-b border-[#E8E2D5] last:border-b-0 last:pb-0">
+                    <Clock className="w-4 h-4 text-[#B2762A] shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-semibold text-[#1C1A17] truncate">
+                        {asm.title}
+                      </h4>
+                      <p className="text-[11px] text-[#6E685F] mt-0.5">
+                        {asm.graded_scripts}/{asm.total_scripts} scripts graded • {asm.approved_scripts} approved
+                      </p>
+                      <Link
+                        href={`/assessments/${asm.id}/review`}
+                        className="inline-block mt-1 text-xs font-medium text-[#2A5A43] hover:underline"
+                      >
+                        Inspect scripts &rarr;
+                      </Link>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+            )}
           </div>
 
           {/* Classes Summary */}
@@ -321,24 +339,37 @@ export default function DashboardPage() {
               </Link>
             </div>
 
-            <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md divide-y divide-[#E8E2D5] overflow-hidden shadow-2xs">
-              {classes.map((cls) => (
-                <div
-                  key={cls.id}
-                  className="p-3 flex items-center justify-between text-xs"
+            {classes.length === 0 ? (
+              <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4 text-center space-y-2 shadow-2xs">
+                <p className="text-xs text-[#6E685F]">No classes created yet.</p>
+                <Link
+                  href="/classes"
+                  className="inline-flex items-center gap-1 text-xs text-[#2A5A43] font-medium hover:underline"
                 >
-                  <div>
-                    <p className="font-medium text-[#1C1A17]">{cls.name}</p>
-                    <p className="text-[#6E685F]">
-                      Section {cls.section} • {cls.academic_year}
-                    </p>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Class Roster</span>
+                </Link>
+              </div>
+            ) : (
+              <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md divide-y divide-[#E8E2D5] overflow-hidden shadow-2xs">
+                {classes.map((cls) => (
+                  <div
+                    key={cls.id}
+                    className="p-3 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <p className="font-medium text-[#1C1A17]">{cls.name}</p>
+                      <p className="text-[#6E685F]">
+                        Section {cls.section} • {cls.academic_year}
+                      </p>
+                    </div>
+                    <span className="px-2 py-0.5 rounded bg-[#F6F3EB] text-[#6E685F] font-mono">
+                      {cls.student_count || 0} students
+                    </span>
                   </div>
-                  <span className="px-2 py-0.5 rounded bg-[#F6F3EB] text-[#6E685F] font-mono">
-                    {cls.student_count || 0} students
-                  </span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

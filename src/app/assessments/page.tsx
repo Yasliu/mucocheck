@@ -11,9 +11,28 @@ export default function AssessmentsPage() {
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setAssessments(repository.getAssessments());
+    async function fetchAssessments() {
+      try {
+        const res = await fetch("/api/assessments");
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data.assessments)) {
+            setAssessments(data.assessments);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("Could not fetch assessments from API:", err);
+      }
+      setAssessments(repository.getAssessments());
+      setLoading(false);
+    }
+
+    fetchAssessments();
   }, []);
 
   const filtered = assessments.filter((asm) => {

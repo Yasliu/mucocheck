@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -26,6 +26,29 @@ export function Shell({ children }: ShellProps) {
   const pathname = usePathname();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [teacherInfo, setTeacherInfo] = useState<{ full_name?: string; email?: string; department?: string } | null>(null);
+
+  useEffect(() => {
+    async function loadTeacher() {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.teacher) {
+            setTeacherInfo(data.teacher);
+            return;
+          }
+        }
+      } catch (err) {
+        // graceful fallback to local repo
+      }
+      try {
+        const p = (await import("@/lib/db/repo")).repository.getProfile();
+        setTeacherInfo(p);
+      } catch {}
+    }
+    loadTeacher();
+  }, []);
 
   const navItems = [
     { label: "Overview", href: "/", icon: LayoutDashboard },
@@ -161,14 +184,21 @@ export function Shell({ children }: ShellProps) {
           <div className="flex items-center justify-between pt-1">
             <div className="flex items-center gap-2 overflow-hidden">
               <div className="w-7 h-7 rounded-full bg-[#E8E2D5] text-[#2A5A43] flex items-center justify-center font-medium text-xs shrink-0">
-                EV
+                {teacherInfo?.full_name
+                  ? teacherInfo.full_name
+                      .split(" ")
+                      .map((n) => n[0])
+                      .join("")
+                      .slice(0, 2)
+                      .toUpperCase()
+                  : "MC"}
               </div>
               <div className="truncate">
                 <p className="text-xs font-semibold text-[#1C1A17] truncate">
-                  Dr. Eleanor Vance
+                  {teacherInfo?.full_name || "Educator"}
                 </p>
                 <p className="text-[10px] text-[#6E685F] truncate">
-                  Natural Sciences
+                  {teacherInfo?.department || teacherInfo?.email || "Teacher Workspace"}
                 </p>
               </div>
             </div>
