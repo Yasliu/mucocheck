@@ -16,7 +16,12 @@ import {
   Check,
 } from "lucide-react";
 import { repository } from "@/lib/db/repo";
-import { Assessment, AssessmentQuestion, StudentScript } from "@/lib/types";
+import {
+  Assessment,
+  AssessmentQuestion,
+  StudentScript,
+  AssessmentUnderstandingMap,
+} from "@/lib/types";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
 export default function AssessmentDetailPage({
@@ -30,6 +35,9 @@ export default function AssessmentDetailPage({
   const [assessment, setAssessment] = useState<Assessment | null>(null);
   const [questions, setQuestions] = useState<AssessmentQuestion[]>([]);
   const [scripts, setScripts] = useState<StudentScript[]>([]);
+  const [understandingMap, setUnderstandingMap] = useState<AssessmentUnderstandingMap | null>(null);
+  const [mapFreshness, setMapFreshness] = useState<{ isStale: boolean; staleReason?: string } | null>(null);
+  const [verifyingMap, setVerifyingMap] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -42,9 +50,14 @@ export default function AssessmentDetailPage({
             setAssessment(data.assessment);
             setQuestions(data.questions || []);
             setScripts(data.scripts || []);
-            setLoading(false);
-            return;
           }
+        }
+
+        const mapRes = await fetch(`/api/assessments/${assessmentId}/understanding-map`);
+        if (mapRes.ok) {
+          const mapData = await mapRes.json();
+          setUnderstandingMap(mapData.understanding_map);
+          setMapFreshness(mapData.freshness);
         }
       } catch (err) {
         console.warn("Could not fetch assessment detail from API:", err);
@@ -55,12 +68,36 @@ export default function AssessmentDetailPage({
         setAssessment(asm);
         setQuestions(repository.getQuestions(assessmentId));
         setScripts(repository.getScripts(assessmentId));
+        const localMap = repository.getUnderstandingMap(assessmentId);
+        if (localMap) {
+          setUnderstandingMap(localMap);
+        }
       }
       setLoading(false);
     }
 
     loadAssessmentDetail();
   }, [assessmentId]);
+
+  const handleVerifyMap = async () => {
+    setVerifyingMap(true);
+    try {
+      const res = await fetch(`/api/assessments/${assessmentId}/understanding-map`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "verify" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUnderstandingMap(data.understanding_map);
+        setMapFreshness({ isStale: false });
+      }
+    } catch {
+      alert("Failed to verify understanding map");
+    } finally {
+      setVerifyingMap(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -213,6 +250,112 @@ export default function AssessmentDetailPage({
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Internal Understanding Map */}
+      <div className="bg-[#FFFFFF] border border-[#E8E2D5] rounded-md p-4 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E2D5] pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-[#2A5A43]" />
+              <h3 className="font-serif text-base font-semibold text-[#1C1A17]">
+                Internal Understanding Map
+              </h3>
+              {understandingMap ? (
+                mapFreshness?.isStale ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#FDF3E7] text-[#B2762A] border border-[#F3DFC1]">
+                    <AlertTriangle className="w-3 h-3" />
+                    Stale Source
+                  </span>
+                ) : understandingMap.status === "verified" ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#EFF5F1] text-[#2A5A43] border border-[#D1E5D8]">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Teacher Verified
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-[#EBF3FB] text-[#245D8C] border border-[#CEE1F5]">
+                    Proposed
+                  </span>
+                )
+              ) : (
+                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-[#F2EFE9] text-[#6E685F]">
+                  Not Generated
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-[#6E685F] mt-0.5">
+              Structured exam interpretation linking original Question Paper &amp; Marking Scheme coordinates, reusable across all student submissions.
+            </p>
+          </div>
+
+          {understandingMap && (understandingMap.status !== "verified" || mapFreshness?.isStale) && (
+            <button
+              onClick={handleVerifyMap}
+              disabled={verifyingMap}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#2A5A43] hover:bg-[#214734] disabled:opacity-50 text-[#FBF9F5] text-xs font-medium transition-colors self-start sm:self-auto cursor-pointer"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>{verifyingMap ? "Verifying..." : "Verify & Lock Map"}</span>
+            </button>
+          )}
+        </div>
+
+        {mapFreshness?.isStale && (
+          <div className="p-3 rounded border border-[#F3DFC1] bg-[#FDF3E7] text-xs text-[#8A5618] flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Source Documents Have Changed</p>
+              <p className="mt-0.5 text-[11px]">
+                {mapFreshness.staleReason || "The question paper or marking scheme was updated after this map was prepared. Re-verify the map to acknowledge the new source files."}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {!understandingMap ? (
+          <div className="p-4 rounded border border-dashed border-[#E8E2D5] bg-[#FAF8F3] text-center space-y-1.5">
+            <p className="text-xs font-medium text-[#1C1A17]">No Understanding Map Generated Yet</p>
+            <p className="text-[11px] text-[#6E685F] max-w-md mx-auto">
+              The internal understanding map will link each question to its exact coordinates, rubric criteria (M/A/B marks), and diagrams in the master documents.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-2.5 rounded bg-[#FAF8F3] border border-[#E8E2D5]">
+                <span className="text-[#6E685F] block text-[11px]">Syllabus &amp; Paper</span>
+                <span className="font-semibold text-sm text-[#1C1A17]">
+                  {understandingMap.syllabus_code || "0580"} / {understandingMap.paper_code || "Core/Ext"}
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-[#FAF8F3] border border-[#E8E2D5]">
+                <span className="text-[#6E685F] block text-[11px]">Map Version</span>
+                <span className="font-semibold text-sm text-[#1C1A17]">
+                  v{understandingMap.version}
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-[#FAF8F3] border border-[#E8E2D5]">
+                <span className="text-[#6E685F] block text-[11px]">Gradable Questions</span>
+                <span className="font-semibold text-sm text-[#1C1A17]">
+                  {understandingMap.nodes?.length ?? 0} Root ({understandingMap.total_questions_count ?? 0} Sub-items)
+                </span>
+              </div>
+              <div className="p-2.5 rounded bg-[#FAF8F3] border border-[#E8E2D5]">
+                <span className="text-[#6E685F] block text-[11px]">Mapped Total Marks</span>
+                <span className="font-semibold text-sm text-[#1C1A17]">
+                  {understandingMap.total_max_marks} marks
+                </span>
+              </div>
+            </div>
+
+            {understandingMap.verified_at && (
+              <p className="text-[11px] text-[#2A5A43] flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Verified by teacher on {new Date(understandingMap.verified_at).toLocaleDateString()} at {new Date(understandingMap.verified_at).toLocaleTimeString()}</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Question Rubric Breakdown */}

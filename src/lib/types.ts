@@ -190,3 +190,5 @@ export interface ReportCardRecord {
   completed_assessments: number;
   missing_assessments: number;
 }
+
+export * from "./understanding/types";

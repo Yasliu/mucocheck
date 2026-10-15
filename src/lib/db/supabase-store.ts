@@ -11,12 +11,14 @@ import {
   Student,
   StudentScript,
   TeacherProfile,
+  AssessmentUnderstandingMap,
 } from "../types";
 import {
   calculateStudentTotals,
   DEFAULT_GRADE_BANDS,
   resolveGradeBand,
 } from "../scoring/deterministic-calculator";
+import { evaluateMapFreshness } from "../understanding/validator";
 import { INITIAL_PROFILE } from "./repo";
 
 // Validates whether a string is a standard RFC4122 UUID
@@ -1179,5 +1181,140 @@ export class SupabaseStore {
     }
 
     return null;
+  }
+
+  // --- Understanding Maps ---
+  async getUnderstandingMap(assessmentId: string): Promise<AssessmentUnderstandingMap | null> {
+    const validAssessmentId = normalizeUuid(assessmentId);
+    try {
+      const { data, error } = await this.client
+        .from("assessment_understanding_maps")
+        .select("*")
+        .eq("assessment_id", validAssessmentId)
+        .maybeSingle();
+
+      if (error || !data) {
+        return null;
+      }
+
+      const map: AssessmentUnderstandingMap = {
+        id: data.id,
+        assessment_id: data.assessment_id,
+        version: Number(data.version) || 1,
+        status: data.status,
+        syllabus_code: data.syllabus_code || undefined,
+        paper_code: data.paper_code || undefined,
+        exam_session: data.exam_session || undefined,
+        source_question_paper: data.source_question_paper,
+        source_marking_scheme: data.source_marking_scheme,
+        total_max_marks: Number(data.total_max_marks) || 0,
+        total_questions_count: Number(data.total_questions_count) || 0,
+        nodes: data.nodes || [],
+        unresolved_items_count: Number(data.unresolved_items_count) || 0,
+        has_ambiguities: Boolean(data.has_ambiguities),
+        verified_by: data.verified_by || undefined,
+        verified_at: data.verified_at || undefined,
+        teacher_notes: data.teacher_notes || undefined,
+        created_at: data.created_at,
+        updated_at: data.updated_at,
+      };
+
+      // Check freshness against current assessment paths
+      const asm = await this.getAssessment(assessmentId);
+      if (asm) {
+        const freshness = evaluateMapFreshness(
+          map,
+          { path: asm.question_paper_path, name: asm.question_paper_name },
+          { path: asm.marking_scheme_path, name: asm.marking_scheme_name }
+        );
+        if (freshness.isStale && map.status !== "stale") {
+          map.status = "stale";
+          map.updated_at = new Date().toISOString();
+          await this.client
+            .from("assessment_understanding_maps")
+            .update({ status: "stale", updated_at: map.updated_at })
+            .eq("id", map.id);
+        }
+      }
+
+      return map;
+    } catch {
+      // In case migration has not been applied remotely yet, fail safe without throwing
+      return null;
+    }
+  }
+
+  async saveUnderstandingMap(mapData: AssessmentUnderstandingMap): Promise<AssessmentUnderstandingMap> {
+    const validAssessmentId = normalizeUuid(mapData.assessment_id);
+    const validId = normalizeUuid(mapData.id);
+    const payload = {
+      id: validId,
+      assessment_id: validAssessmentId,
+      version: Number(mapData.version) || 1,
+      status: mapData.status,
+      syllabus_code: mapData.syllabus_code || null,
+      paper_code: mapData.paper_code || null,
+      exam_session: mapData.exam_session || null,
+      source_question_paper: mapData.source_question_paper,
+      source_marking_scheme: mapData.source_marking_scheme,
+      total_max_marks: Number(mapData.total_max_marks) || 0,
+      total_questions_count: Number(mapData.total_questions_count) || 0,
+      nodes: mapData.nodes || [],
+      unresolved_items_count: Number(mapData.unresolved_items_count) || 0,
+      has_ambiguities: Boolean(mapData.has_ambiguities),
+      verified_by: mapData.verified_by ? normalizeUuid(mapData.verified_by) : null,
+      verified_at: mapData.verified_at || null,
+      teacher_notes: mapData.teacher_notes || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await this.client
+      .from("assessment_understanding_maps")
+      .upsert(payload, { onConflict: "assessment_id" })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to save understanding map: ${error.message}`);
+    }
+
+    return {
+      ...mapData,
+      id: data.id,
+      updated_at: data.updated_at,
+    };
+  }
+
+  async verifyUnderstandingMap(
+    assessmentId: string,
+    teacherId: string,
+    teacherNotes?: string
+  ): Promise<AssessmentUnderstandingMap | null> {
+    const validAssessmentId = normalizeUuid(assessmentId);
+    const validTeacherId = normalizeUuid(teacherId);
+    const now = new Date().toISOString();
+
+    const updatePayload: Record<string, unknown> = {
+      status: "verified",
+      verified_by: validTeacherId,
+      verified_at: now,
+      updated_at: now,
+    };
+    if (teacherNotes !== undefined) {
+      updatePayload.teacher_notes = teacherNotes;
+    }
+
+    const { data, error } = await this.client
+      .from("assessment_understanding_maps")
+      .update(updatePayload)
+      .eq("assessment_id", validAssessmentId)
+      .select()
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return this.getUnderstandingMap(assessmentId);
   }
 }

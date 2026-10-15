@@ -8,6 +8,7 @@ import {
   Student,
   StudentScript,
   TeacherProfile,
+  AssessmentUnderstandingMap,
 } from "../types";
 import {
   calculateStudentTotals,
@@ -15,6 +16,7 @@ import {
   resolveGradeBand,
   validateScoreBounds,
 } from "../scoring/deterministic-calculator";
+import { evaluateMapFreshness } from "../understanding/validator";
 
 // Initial Teacher Profile
 export const INITIAL_PROFILE: TeacherProfile = {
@@ -550,6 +552,7 @@ class Repository {
   private questions: AssessmentQuestion[] = [...INITIAL_QUESTIONS];
   private scripts: StudentScript[] = [...INITIAL_SCRIPTS];
   private results: GradingResult[] = [...INITIAL_GRADING_RESULTS];
+  private understanding_maps: AssessmentUnderstandingMap[] = [];
 
   // Profile / Settings
   getProfile(): TeacherProfile {
@@ -1035,6 +1038,73 @@ class Repository {
     this.questions = [...INITIAL_QUESTIONS];
     this.scripts = [...INITIAL_SCRIPTS];
     this.results = [...INITIAL_GRADING_RESULTS];
+    this.understanding_maps = [];
+  }
+
+  // Understanding Maps
+  getUnderstandingMap(assessmentId: string): AssessmentUnderstandingMap | null {
+    const map = this.understanding_maps.find((m) => m.assessment_id === assessmentId);
+    if (!map) return null;
+
+    const asm = this.getAssessment(assessmentId);
+    if (asm) {
+      const freshness = evaluateMapFreshness(
+        map,
+        { path: asm.question_paper_path, name: asm.question_paper_name },
+        { path: asm.marking_scheme_path, name: asm.marking_scheme_name }
+      );
+      if (freshness.isStale && map.status !== "stale") {
+        map.status = "stale";
+        map.updated_at = new Date().toISOString();
+      }
+    }
+
+    return map;
+  }
+
+  saveUnderstandingMap(mapData: AssessmentUnderstandingMap): AssessmentUnderstandingMap {
+    const existingIdx = this.understanding_maps.findIndex(
+      (m) => m.assessment_id === mapData.assessment_id
+    );
+
+    const now = new Date().toISOString();
+    const mapToSave: AssessmentUnderstandingMap = {
+      ...mapData,
+      updated_at: now,
+      created_at: existingIdx !== -1 ? this.understanding_maps[existingIdx].created_at : (mapData.created_at || now),
+    };
+
+    if (existingIdx !== -1) {
+      this.understanding_maps[existingIdx] = mapToSave;
+    } else {
+      this.understanding_maps.push(mapToSave);
+    }
+
+    return mapToSave;
+  }
+
+  verifyUnderstandingMap(
+    assessmentId: string,
+    teacherId: string,
+    teacherNotes?: string
+  ): AssessmentUnderstandingMap | null {
+    const map = this.getUnderstandingMap(assessmentId);
+    if (!map) return null;
+
+    map.status = "verified";
+    map.verified_by = teacherId;
+    map.verified_at = new Date().toISOString();
+    if (teacherNotes !== undefined) {
+      map.teacher_notes = teacherNotes;
+    }
+    map.updated_at = new Date().toISOString();
+
+    const idx = this.understanding_maps.findIndex((m) => m.assessment_id === assessmentId);
+    if (idx !== -1) {
+      this.understanding_maps[idx] = map;
+    }
+
+    return map;
   }
 }
 

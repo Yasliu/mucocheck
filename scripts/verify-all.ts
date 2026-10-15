@@ -9,6 +9,18 @@ import {
 import { MockGradingProvider } from "../src/lib/grading/mock-provider";
 import { NebiusTokenFactoryGradingProvider } from "../src/lib/grading/nebius-provider";
 import { repository } from "../src/lib/db/repo";
+import {
+  checkCambridgeMarkRules,
+  computeSourceFingerprint,
+  flattenLeafQuestionNodes,
+  calculateMapTotalMarks,
+  evaluateMapFreshness,
+  validateUnderstandingMap,
+} from "../src/lib/understanding/validator";
+import {
+  AssessmentUnderstandingMap,
+  UnderstandingMapQuestionNode,
+} from "../src/lib/understanding/types";
 
 async function runVerification() {
   console.log("=== RUNNING MUCOCHECK VERIFICATION TEST SUITE ===\n");
@@ -583,6 +595,214 @@ async function runVerification() {
   assert(updatedScript?.status === "approved", "Script approved directly without per-question checkpoints");
   assert(updatedScript?.total_score === 54, "Script total score recorded as 54 marks");
   assert(updatedScript?.percentage === 90, "Script percentage calculated as 90% (54/60)");
+
+  // 22. Cambridge 0580 Understanding-Map Foundation Tests
+  console.log("\n--- 22. Cambridge 0580 Understanding Map Foundation ---");
+
+  // Cambridge 0580 Mark Rules
+  const validCambridgeCriteria = [
+    { id: "c-1", mark_type: "M" as const, marks: 1, description: "Method for expanding brackets" },
+    { id: "c-2", mark_type: "A" as const, marks: 1, description: "Accuracy for correct expansion", dependent_on: "c-1" },
+    { id: "c-3", mark_type: "B" as const, marks: 1, description: "Independent mark for final answer" },
+  ];
+  const cambridgeRulesCheck = checkCambridgeMarkRules(validCambridgeCriteria);
+  assert(cambridgeRulesCheck.valid, "Valid Cambridge M1, A1, B1 criteria chain passes validation");
+
+  const invalidCambridgeCriteria = [
+    { id: "c-err", mark_type: "A" as const, marks: 1, description: "Orphan accuracy mark without method" },
+  ];
+  const invalidRulesCheck = checkCambridgeMarkRules(invalidCambridgeCriteria);
+  assert(!invalidRulesCheck.valid && invalidRulesCheck.warnings.length > 0, "Cambridge A mark without preceding M mark is rejected");
+
+  // Hierarchical question tree and leaf extraction
+  const hierarchicalQuestions: UnderstandingMapQuestionNode[] = [
+    {
+      id: "node-q1",
+      question_number: 1,
+      full_label: "1",
+      title: "Algebraic Simplification",
+      max_marks: 4,
+      marking_criteria: [],
+      question_paper_ref: { document_type: "question_paper", page: 2 },
+      marking_scheme_ref: { document_type: "marking_scheme", page: 1 },
+      sub_questions: [
+        {
+          id: "node-q1a",
+          question_number: 1,
+          sub_label: "(a)",
+          full_label: "1(a)",
+          max_marks: 1,
+          question_paper_ref: {
+            document_type: "question_paper",
+            page: 2,
+            bbox: { x: 0.1, y: 0.15, width: 0.8, height: 0.1 },
+          },
+          marking_scheme_ref: {
+            document_type: "marking_scheme",
+            page: 1,
+            bbox: { x: 0.1, y: 0.2, width: 0.8, height: 0.08 },
+          },
+          marking_criteria: [
+            { id: "c-1a", mark_type: "B", marks: 1, description: "Correct simplified term" },
+          ],
+        },
+        {
+          id: "node-q1b",
+          question_number: 1,
+          sub_label: "(b)",
+          full_label: "1(b)",
+          max_marks: 3,
+          marking_criteria: [],
+          question_paper_ref: { document_type: "question_paper", page: 2 },
+          marking_scheme_ref: { document_type: "marking_scheme", page: 1 },
+          sub_questions: [
+            {
+              id: "node-q1bi",
+              question_number: 1,
+              sub_label: "(b)(i)",
+              full_label: "1(b)(i)",
+              max_marks: 2,
+              question_paper_ref: {
+                document_type: "question_paper",
+                page: 2,
+                bbox: { x: 0.1, y: 0.28, width: 0.8, height: 0.15 },
+              },
+              marking_scheme_ref: {
+                document_type: "marking_scheme",
+                page: 1,
+                bbox: { x: 0.1, y: 0.3, width: 0.8, height: 0.12 },
+              },
+              marking_criteria: [
+                { id: "c-1bi-m", mark_type: "M", marks: 1, description: "Method for factorizing" },
+                { id: "c-1bi-a", mark_type: "A", marks: 1, description: "Correct factors", dependent_on: "c-1bi-m" },
+              ],
+            },
+            {
+              id: "node-q1bii",
+              question_number: 1,
+              sub_label: "(b)(ii)",
+              full_label: "1(b)(ii)",
+              max_marks: 1,
+              question_paper_ref: {
+                document_type: "question_paper",
+                page: 2,
+                bbox: { x: 0.1, y: 0.45, width: 0.8, height: 0.1 },
+              },
+              marking_scheme_ref: {
+                document_type: "marking_scheme",
+                page: 1,
+                bbox: { x: 0.1, y: 0.44, width: 0.8, height: 0.08 },
+              },
+              marking_criteria: [
+                { id: "c-1bii", mark_type: "B", marks: 1, description: "Follow-through solution", is_follow_through: true },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ];
+
+  const leafNodes = flattenLeafQuestionNodes(hierarchicalQuestions);
+  assert(leafNodes.length === 3, "Leaf flattening correctly extracts 3 gradable sub-questions (1(a), 1(b)(i), 1(b)(ii))");
+  assert(leafNodes.map(n => n.full_label).join(",") === "1(a),1(b)(i),1(b)(ii)", "Leaf nodes preserve exact Cambridge question numbering hierarchy");
+
+  const computedTotal = calculateMapTotalMarks(hierarchicalQuestions);
+  assert(computedTotal === 4, "Calculated map total marks matches sum of leaf nodes (1 + 2 + 1 = 4)");
+
+  // Normalized Bounding Box Validation
+  const validMapObject: AssessmentUnderstandingMap = {
+    id: "map-test-0580",
+    assessment_id: testAssessmentId,
+    syllabus_code: "0580",
+    paper_code: "Paper 4",
+    total_max_marks: 4,
+    total_questions_count: 3,
+    unresolved_items_count: 0,
+    has_ambiguities: false,
+    status: "proposed",
+    version: 1,
+    source_question_paper: {
+      path: "reference_docs/papers/Original_Exam_Paper.pdf",
+      name: "Original_Exam_Paper.pdf",
+      fingerprint: computeSourceFingerprint("reference_docs/papers/Original_Exam_Paper.pdf", "Original_Exam_Paper.pdf", 102400),
+    },
+    source_marking_scheme: {
+      path: "reference_docs/schemes/Original_Marking_Scheme.pdf",
+      name: "Original_Marking_Scheme.pdf",
+      fingerprint: computeSourceFingerprint("reference_docs/schemes/Original_Marking_Scheme.pdf", "Original_Marking_Scheme.pdf", 51200),
+    },
+    nodes: hierarchicalQuestions,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const mapValidation = validateUnderstandingMap(validMapObject);
+  assert(mapValidation.valid, "Valid Cambridge 0580 understanding map schema and coordinate bounds pass validation");
+
+  const invalidCoordsMap: AssessmentUnderstandingMap = {
+    ...validMapObject,
+    id: "map-invalid-coords",
+    nodes: [
+      {
+        id: "bad-q",
+        question_number: 1,
+        full_label: "1",
+        max_marks: 1,
+        marking_criteria: [],
+        question_paper_ref: {
+          document_type: "question_paper",
+          page: 1,
+          bbox: { x: 1.5, y: -0.2, width: 0.5, height: 0.5 }, // invalid: x > 1, y < 0
+        },
+        marking_scheme_ref: { document_type: "marking_scheme", page: 1 },
+      },
+    ],
+  };
+  const invalidValidation = validateUnderstandingMap(invalidCoordsMap);
+  assert(!invalidValidation.valid && invalidValidation.errors.some(e => e.includes("bounding box")), "Out-of-bounds coordinates (> 1.0 or < 0.0) correctly rejected");
+
+  // Source Document Freshness & Invalidation
+  const currentQp = {
+    path: "reference_docs/papers/Original_Exam_Paper.pdf",
+    name: "Original_Exam_Paper.pdf",
+    fingerprint: computeSourceFingerprint("reference_docs/papers/Original_Exam_Paper.pdf", "Original_Exam_Paper.pdf", 102400),
+  };
+  const currentMs = {
+    path: "reference_docs/schemes/Original_Marking_Scheme.pdf",
+    name: "Original_Marking_Scheme.pdf",
+    fingerprint: computeSourceFingerprint("reference_docs/schemes/Original_Marking_Scheme.pdf", "Original_Marking_Scheme.pdf", 51200),
+  };
+
+  const freshEvaluation = evaluateMapFreshness(validMapObject, currentQp, currentMs);
+  assert(!freshEvaluation.isStale, "Map is fresh when current question paper and marking scheme match original fingerprints");
+
+  const alteredQp = {
+    path: "reference_docs/papers/Original_Exam_Paper_revised.pdf",
+    name: "Original_Exam_Paper_v2.pdf",
+    fingerprint: computeSourceFingerprint("reference_docs/papers/Original_Exam_Paper_revised.pdf", "Original_Exam_Paper_v2.pdf", 102400),
+  };
+  const staleEvaluation = evaluateMapFreshness(validMapObject, alteredQp, currentMs);
+  assert(Boolean(staleEvaluation.isStale && staleEvaluation.staleReason?.includes("Question paper")), "Map immediately invalidated as stale when Question Paper changes");
+
+  // Storage Persistence and Cohort Reuse
+  testStore.saveUnderstandingMap(validMapObject);
+  const retrievedMap = testStore.getUnderstandingMap(testAssessmentId);
+  assert(retrievedMap !== null, "Understanding map persisted and retrieved from store");
+  assert(retrievedMap?.status === "proposed", "Retrieved map begins in proposed status");
+
+  // Verify and lock understanding map
+  testStore.verifyUnderstandingMap(testAssessmentId, "Dr. Vance", "usr-teacher-001");
+  const verifiedMap = testStore.getUnderstandingMap(testAssessmentId);
+  assert(verifiedMap?.status === "verified", "Understanding map status upgraded to verified");
+  assert(verifiedMap?.verified_by === "Dr. Vance", "Verified map records teacher name");
+  assert(Boolean(verifiedMap?.verified_at), "Verified map records cryptographic timestamp");
+
+  // Confirm reuse across multiple student scripts
+  const script1Map = testStore.getUnderstandingMap(testAssessmentId);
+  const script2Map = testStore.getUnderstandingMap(testAssessmentId);
+  assert(script1Map?.id === script2Map?.id, "Identical understanding map reused across multiple student submissions");
+  assert(script1Map?.total_questions_count === 3, "Reused map provides consistent Cambridge 0580 question structure to all scripts");
 
   console.log(`\n==================================================`);
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);

@@ -11,6 +11,7 @@ import {
   Student,
   StudentScript,
   TeacherProfile,
+  AssessmentUnderstandingMap,
 } from "../types";
 import {
   calculateStudentTotals,
@@ -18,6 +19,7 @@ import {
   resolveGradeBand,
   validateScoreBounds,
 } from "../scoring/deterministic-calculator";
+import { evaluateMapFreshness } from "../understanding/validator";
 import {
   INITIAL_ASSESSMENTS,
   INITIAL_CLASSES,
@@ -36,6 +38,7 @@ interface DatabaseSchema {
   questions: AssessmentQuestion[];
   scripts: StudentScript[];
   results: GradingResult[];
+  understanding_maps: AssessmentUnderstandingMap[];
 }
 
 const DATA_DIR = path.join(process.cwd(), ".data");
@@ -61,6 +64,7 @@ class ServerStore {
         const raw = fs.readFileSync(DB_FILE, "utf-8");
         const parsed = JSON.parse(raw);
         if (parsed.profile && Array.isArray(parsed.assessments)) {
+          parsed.understanding_maps = parsed.understanding_maps || [];
           return parsed;
         }
       } catch (err) {
@@ -76,6 +80,7 @@ class ServerStore {
       questions: [...INITIAL_QUESTIONS],
       scripts: [...INITIAL_SCRIPTS],
       results: [...INITIAL_GRADING_RESULTS],
+      understanding_maps: [],
     };
 
     this.saveData(initialData);
@@ -862,9 +867,79 @@ class ServerStore {
       questions: [...INITIAL_QUESTIONS],
       scripts: [...INITIAL_SCRIPTS],
       results: [...INITIAL_GRADING_RESULTS],
+      understanding_maps: [],
     };
     this.data = initialData;
     this.saveData(initialData);
+  }
+
+  // Understanding Maps
+  getUnderstandingMap(assessmentId: string): AssessmentUnderstandingMap | null {
+    const map = this.data.understanding_maps.find((m) => m.assessment_id === assessmentId);
+    if (!map) return null;
+
+    const asm = this.getAssessment(assessmentId);
+    if (asm) {
+      const freshness = evaluateMapFreshness(
+        map,
+        { path: asm.question_paper_path, name: asm.question_paper_name },
+        { path: asm.marking_scheme_path, name: asm.marking_scheme_name }
+      );
+      if (freshness.isStale && map.status !== "stale") {
+        map.status = "stale";
+        map.updated_at = new Date().toISOString();
+        this.saveData();
+      }
+    }
+
+    return map;
+  }
+
+  saveUnderstandingMap(mapData: AssessmentUnderstandingMap): AssessmentUnderstandingMap {
+    const existingIdx = this.data.understanding_maps.findIndex(
+      (m) => m.assessment_id === mapData.assessment_id
+    );
+
+    const now = new Date().toISOString();
+    const mapToSave: AssessmentUnderstandingMap = {
+      ...mapData,
+      updated_at: now,
+      created_at: existingIdx !== -1 ? this.data.understanding_maps[existingIdx].created_at : (mapData.created_at || now),
+    };
+
+    if (existingIdx !== -1) {
+      this.data.understanding_maps[existingIdx] = mapToSave;
+    } else {
+      this.data.understanding_maps.push(mapToSave);
+    }
+
+    this.saveData();
+    return mapToSave;
+  }
+
+  verifyUnderstandingMap(
+    assessmentId: string,
+    teacherId: string,
+    teacherNotes?: string
+  ): AssessmentUnderstandingMap | null {
+    const map = this.getUnderstandingMap(assessmentId);
+    if (!map) return null;
+
+    map.status = "verified";
+    map.verified_by = teacherId;
+    map.verified_at = new Date().toISOString();
+    if (teacherNotes !== undefined) {
+      map.teacher_notes = teacherNotes;
+    }
+    map.updated_at = new Date().toISOString();
+
+    const idx = this.data.understanding_maps.findIndex((m) => m.assessment_id === assessmentId);
+    if (idx !== -1) {
+      this.data.understanding_maps[idx] = map;
+      this.saveData();
+    }
+
+    return map;
   }
 }
 
