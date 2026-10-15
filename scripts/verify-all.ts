@@ -447,6 +447,72 @@ async function runVerification() {
   assert(uuidRegex.test(convertedUuid), "Converts synthetic teacher ID to valid RFC4122 UUID");
   assert(normalizeUuid("usr-teacher-001") === convertedUuid, "Deterministic UUID conversion is reproducible");
 
+  // 20. Document Viewer State, Navigation, Rotation & Zoom
+  console.log("\n--- 20. Document Viewer State, Navigation & Rotation ---");
+  const {
+    clampPage,
+    nextPage,
+    prevPage,
+    goToPage,
+    zoomIn,
+    zoomOut,
+    setZoom,
+    rotateClockwise,
+    rotateCounterClockwise,
+    detectDocumentType,
+    resetViewerState,
+  } = await import("../src/lib/document/viewer-state");
+
+  const initialState = resetViewerState(5);
+  assert(initialState.currentPage === 1, "Initial page is 1");
+  assert(initialState.totalPages === 5, "Total pages recognized as 5");
+  assert(initialState.zoomLevel === 100, "Initial zoom is 100%");
+  assert(initialState.rotation === 0, "Initial rotation is 0 degrees");
+
+  // Page navigation clamping
+  const p2 = nextPage(initialState);
+  assert(p2.currentPage === 2, "nextPage advances from 1 to 2");
+  const p1 = prevPage(p2);
+  assert(p1.currentPage === 1, "prevPage retreats from 2 to 1");
+  const p1Clamp = prevPage(p1);
+  assert(p1Clamp.currentPage === 1, "prevPage clamps at page 1");
+  const p5 = goToPage(5, initialState);
+  assert(p5.currentPage === 5, "goToPage navigates directly to page 5");
+  const pOverflow = goToPage(99, initialState);
+  assert(pOverflow.currentPage === 5, "goToPage clamps at totalPages (5)");
+  const pUnderflow = goToPage(-5, initialState);
+  assert(pUnderflow.currentPage === 1, "goToPage clamps below 1 to page 1");
+
+  // Zoom controls & clamping
+  const zPlus = zoomIn(initialState);
+  assert(zPlus.zoomLevel === 115, "zoomIn increases zoom by 15%");
+  const zMinus = zoomOut(initialState);
+  assert(zMinus.zoomLevel === 85, "zoomOut decreases zoom by 15%");
+  const zMax = setZoom(999, initialState);
+  assert(zMax.zoomLevel === 250, "setZoom clamps to MAX_ZOOM (250%)");
+  const zMin = setZoom(10, initialState);
+  assert(zMin.zoomLevel === 50, "setZoom clamps to MIN_ZOOM (50%)");
+
+  // 90-degree Rotation
+  const r90 = rotateClockwise(initialState);
+  assert(r90.rotation === 90, "rotateClockwise turns 0 -> 90 degrees");
+  const r180 = rotateClockwise(r90);
+  assert(r180.rotation === 180, "rotateClockwise turns 90 -> 180 degrees");
+  const r270 = rotateClockwise(r180);
+  assert(r270.rotation === 270, "rotateClockwise turns 180 -> 270 degrees");
+  const r360 = rotateClockwise(r270);
+  assert(r360.rotation === 0, "rotateClockwise wraps 270 -> 0 degrees");
+  const rCCW = rotateCounterClockwise(initialState);
+  assert(rCCW.rotation === 270, "rotateCounterClockwise wraps 0 -> 270 degrees");
+
+  // Document Type Detection
+  assert(detectDocumentType("application/pdf", "test.pdf") === "pdf", "Detects PDF by mime and filename");
+  assert(detectDocumentType(undefined, "student-submission.PDF") === "pdf", "Detects uppercase .PDF filename");
+  assert(detectDocumentType("image/jpeg", "scan.jpg") === "image", "Detects JPEG image");
+  assert(detectDocumentType("image/png", "scan.png") === "image", "Detects PNG image");
+  assert(detectDocumentType("image/webp", "scan.webp") === "image", "Detects WebP image");
+  assert(detectDocumentType("application/zip", "archive.zip") === "unsupported", "Identifies unsupported file formats");
+
   console.log(`\n==================================================`);
   console.log(`VERIFICATION SUMMARY: ${passed} PASSED, ${failed} FAILED`);
   console.log(`==================================================`);

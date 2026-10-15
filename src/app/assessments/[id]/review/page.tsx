@@ -36,6 +36,7 @@ import {
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { UncertaintyBadge } from "@/components/ui/UncertaintyBadge";
 import { validateScoreBounds } from "@/lib/scoring/deterministic-calculator";
+import { DocumentViewer } from "@/components/document/DocumentViewer";
 
 function ReviewWorkspaceContent({
   params,
@@ -413,153 +414,61 @@ function ReviewWorkspaceContent({
 
       {/* Main Split-Screen Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-[680px]">
-        {/* Left Side: Script Document & Answer Preview (7 cols) */}
-        <div className="lg:col-span-7 bg-[#FFFFFF] border border-[#E8E2D5] rounded-md flex flex-col shadow-2xs overflow-hidden">
-          {/* Viewer Toolbar */}
-          <div className="p-3 bg-[#FAF8F3] border-b border-[#E8E2D5] flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-[#2A5A43]" />
-              <span className="font-medium text-[#1C1A17]">
-                {currentScript?.file_name}
-              </span>
-              <span className="text-[#6E685F]">
-                (Page {currentQuestion?.question_number || 1} of {currentScript?.page_count || 1})
-              </span>
-            </div>
+        {/* Left Side: Real Multi-Page Script Document Viewer (7 cols) */}
+        <div className="lg:col-span-7 flex flex-col gap-3">
+          <DocumentViewer
+            fileUrl={currentScript?.file_path}
+            fileName={currentScript?.file_name}
+            mimeType={currentScript?.mime_type}
+            initialPage={currentQuestion?.question_number || 1}
+            onReassignMatch={() => {
+              setNewMatchQuestionId(selectedQuestionId);
+              setShowMatchDialog(true);
+            }}
+            onFlagUnreadable={() => setShowUnreadableDialog(true)}
+            className="flex-1 min-h-[580px]"
+          />
 
-            <div className="flex items-center gap-2">
-              {/* Match Correction Button */}
-              <button
-                onClick={() => {
-                  setNewMatchQuestionId(selectedQuestionId);
-                  setShowMatchDialog(true);
-                }}
-                className="inline-flex items-center gap-1 text-[11px] text-[#2A5A43] hover:underline"
-                title="Correct question match"
-              >
-                <FileQuestion className="w-3.5 h-3.5" />
-                <span>Reassign Match</span>
-              </button>
-
-              {/* Flag Unreadable Button */}
-              <button
-                onClick={() => setShowUnreadableDialog(true)}
-                className="inline-flex items-center gap-1 text-[11px] text-[#C25B3E] hover:underline"
-                title="Flag as unreadable"
-              >
-                <EyeOff className="w-3.5 h-3.5" />
-                <span>Flag Unreadable</span>
-              </button>
-
-              <div className="h-3 w-px bg-[#E8E2D5] mx-1" />
-
-              <button
-                onClick={() => setZoomLevel((z) => Math.max(75, z - 15))}
-                className="p-1 text-[#6E685F] hover:text-[#1C1A17] rounded"
-                title="Zoom out"
-              >
-                <ZoomOut className="w-3.5 h-3.5" />
-              </button>
-              <span className="text-[11px] font-mono text-[#6E685F]">
-                {zoomLevel}%
-              </span>
-              <button
-                onClick={() => setZoomLevel((z) => Math.min(150, z + 15))}
-                className="p-1 text-[#6E685F] hover:text-[#1C1A17] rounded"
-                title="Zoom in"
-              >
-                <ZoomIn className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Script Document Simulated Surface */}
-          <div className="flex-1 p-6 bg-[#F6F3EB] overflow-auto flex items-center justify-center">
-            <div
-              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: "top center" }}
-              className="w-full max-w-lg bg-[#FFFDF9] border border-[#D8D2C4] shadow-md rounded p-8 font-serif transition-transform duration-150 space-y-6 text-[#1C1A17]"
-            >
-              {/* Header on Student Script Page */}
-              <div className="border-b-2 border-[#1C1A17] pb-3 flex justify-between items-baseline text-xs">
-                <div>
-                  <span className="font-bold uppercase tracking-wider text-[11px]">
-                    Candidate Answer Script
+          {/* Context Card: Extracted Content & Alternative Method Alerts */}
+          {currentResult && (
+            <div className="p-3 bg-[#FAF8F3] border border-[#E8E2D5] rounded-md text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-[#1C1A17]">
+                  Question {currentQuestion?.question_number} Inspection Note:
+                </span>
+                {currentResult.alternative_method_detected && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#FEF7EC] text-[#B2762A] font-medium border border-[#F3DEC0]">
+                    Valid Alternative Method
                   </span>
-                  <p className="font-sans text-sm font-semibold text-[#1C1A17]">
-                    {currentScript?.student_name}
-                  </p>
-                </div>
-                <div className="text-right font-sans">
-                  <span className="text-[#6E685F]">Roll No:</span>{" "}
-                  <strong className="font-mono">{currentScript?.roll_number}</strong>
-                </div>
+                )}
               </div>
 
-              {/* Simulated Handwritten Section */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-xs font-sans text-[#6E685F]">
-                  <span className="font-semibold text-[#1C1A17]">
-                    Matched to Question {currentQuestion?.question_number}
+              {currentResult.answer_extracted_text && (
+                <p className="font-serif italic text-xs leading-relaxed text-[#4A453E] bg-[#FFFFFF] p-2.5 rounded border border-[#E8E2D5]">
+                  &ldquo;{currentResult.answer_extracted_text}&rdquo;
+                </p>
+              )}
+
+              {currentResult.uncertainty_status === "high_uncertainty" && (
+                <div className="p-2 rounded bg-[#FDF2EE] border border-[#F1CDC3] text-[#C25B3E] flex items-start gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Ambiguous Handwriting:</strong>{" "}
+                    {currentResult.unreadable_reason || "Unclear strokes require teacher verification."}
                   </span>
-                  <span>Max: {currentQuestion?.max_marks} marks</span>
                 </div>
+              )}
 
-                {/* Simulated Script Content Box */}
-                <div className="p-4 rounded border-2 border-dashed border-[#2A5A43]/30 bg-[#FAF9F5] space-y-3 relative">
-                  <div className="flex items-center justify-between">
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#EFF5F1] text-[#2A5A43] font-sans font-medium border border-[#BCD4C7]">
-                      Detected Answer Crop: Page {currentQuestion?.question_number || 1}
-                    </span>
-                    {currentResult?.alternative_method_detected && (
-                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-[#FEF7EC] text-[#B2762A] font-sans font-medium border border-[#F3DEC0]">
-                        Valid Alternative Method
-                      </span>
-                    )}
-                  </div>
-
-                  <p className="font-serif italic text-base leading-relaxed text-[#23211E]">
-                    {currentResult?.answer_extracted_text ||
-                      "The candidate answered: Cellular ATP Synthase utilizes the electrochemical proton gradient across the inner mitochondrial membrane..."}
-                  </p>
-
-                  {/* Handwriting condition callout if uncertainty flagged */}
-                  {currentResult?.uncertainty_status === "high_uncertainty" && (
-                    <div className="mt-3 p-2.5 rounded bg-[#FDF2EE] border border-[#F1CDC3] font-sans text-xs text-[#C25B3E] flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="font-semibold">
-                          Low legibility warning / Ambiguous strokes:
-                        </strong>
-                        <p className="text-[11px] mt-0.5">
-                          {currentResult.unreadable_reason ||
-                            "Subscript text has heavy pencil smudging. Teacher inspection required before score sign-off."}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Unmatched / Blank Answer notice */}
-                  {currentResult?.is_unmatched && (
-                    <div className="mt-3 p-2.5 rounded bg-[#FEF7EC] border border-[#F3DEC0] font-sans text-xs text-[#B2762A] flex items-start gap-2">
-                      <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <div>
-                        <strong className="font-semibold">Unmatched Question Match:</strong>
-                        <p className="text-[11px] mt-0.5">
-                          No candidate handwriting found for this question on the expected page. If answered elsewhere, use &ldquo;Reassign Match&rdquo;.
-                        </p>
-                      </div>
-                    </div>
-                  )}
+              {currentResult.is_unmatched && (
+                <div className="p-2 rounded bg-[#FEF7EC] border border-[#F3DEC0] text-[#B2762A] flex items-start gap-1.5">
+                  <HelpCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Unmatched Question:</strong> No answer detected on the default page. Use &ldquo;Reassign Match&rdquo; if answered on another page.
+                  </span>
                 </div>
-              </div>
-
-              {/* Bottom footer on physical script page */}
-              <div className="pt-6 border-t border-[#E8E2D5] flex justify-between text-[11px] font-sans text-[#8E877D]">
-                <span>Examination Paper Ref: {assessment.question_paper_name}</span>
-                <span>Page {currentQuestion?.question_number || 1}</span>
-              </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
 
         {/* Right Side: Grading Result, Rubric & Teacher Approval (5 cols) */}
